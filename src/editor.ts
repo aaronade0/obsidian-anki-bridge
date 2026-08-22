@@ -3,6 +3,7 @@ import { Prec, RangeSetBuilder } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView, keymap, ViewPlugin, type ViewUpdate } from "@codemirror/view";
 import {
   FuzzySuggestModal,
+  Platform,
   setIcon,
   type App,
   type Editor,
@@ -16,6 +17,7 @@ import {
   type CardTemplateChoice
 } from "./card-templates";
 import { FlashcardParser } from "./parser";
+import { findTypedDoubleChevronTrigger } from "./mobile-editor-trigger";
 
 export function openCardTypeModal(app: App, editor: Editor): void {
   new CardTypeModal(app, (choice) => insertCardTemplate(editor, choice)).open();
@@ -78,13 +80,57 @@ export function createEditorExtensions(app: App, parser: FlashcardParser): Exten
     }
   ]);
 
-  return [decorations, Prec.highest(templateKeymap)];
+  const mobileTemplateTrigger = ViewPlugin.fromClass(
+    class {
+      private pickerOpen = false;
+
+      update(update: ViewUpdate): void {
+        if (!Platform.isMobile || this.pickerOpen) {
+          return;
+        }
+        const trigger = findTypedDoubleChevronTrigger(update);
+        if (!trigger) {
+          return;
+        }
+
+        this.pickerOpen = true;
+        new CardTypeModal(
+          app,
+          (choice) => replaceTriggerWithTemplate(update.view, trigger, choice),
+          () => {
+            this.pickerOpen = false;
+          }
+        ).open();
+      }
+    }
+  );
+
+  return [decorations, mobileTemplateTrigger, Prec.highest(templateKeymap)];
+}
+
+function replaceTriggerWithTemplate(
+  view: EditorView,
+  trigger: { from: number; to: number },
+  choice: CardTemplateChoice
+): void {
+  if (view.state.doc.sliceString(trigger.from, trigger.to) !== ">>") {
+    return;
+  }
+  const resolved = resolveCardTemplate(choice, "");
+  const finalHead = trigger.from + resolved.replacement.length - resolved.cursorBack;
+  view.dispatch({
+    changes: { from: trigger.from, to: trigger.to, insert: resolved.replacement },
+    selection: { anchor: finalHead },
+    scrollIntoView: true
+  });
+  view.focus();
 }
 
 class CardTypeModal extends FuzzySuggestModal<CardTemplateChoice> {
   constructor(
     app: App,
-    private readonly onChoose: (choice: CardTemplateChoice) => void
+    private readonly onChoose: (choice: CardTemplateChoice) => void,
+    private readonly onDidClose?: () => void
   ) {
     super(app);
     this.setPlaceholder("Choose a card format …");
@@ -110,6 +156,10 @@ class CardTypeModal extends FuzzySuggestModal<CardTemplateChoice> {
 
   onChooseItem(item: CardTemplateChoice): void {
     this.onChoose(item);
+  }
+
+  onClose(): void {
+    this.onDidClose?.();
   }
 }
 

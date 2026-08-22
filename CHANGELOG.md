@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.2 - Automatic mobile card picker
+
+- Opened the card-format picker immediately after the second `>` is typed on
+  Obsidian Mobile, without requiring a Tab key or toolbar customization.
+- Kept a single `>` inert and retained the existing desktop keyboard workflow.
+- Restricted automatic triggering to direct typing so synchronized, pasted, or
+  pre-existing `>>` text cannot open the picker unexpectedly.
+
 ## 0.4.1 - Touch-friendly mobile card creation
 
 - Added one touch-friendly card picker for Basic, Reversible, List, Dump,

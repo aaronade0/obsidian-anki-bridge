@@ -42,16 +42,15 @@ On desktop:
 
 On a phone or tablet:
 
-1. Place the cursor where the card should be inserted, or select existing text
-   that should become the front or a cloze deletion.
-2. Tap the plus-in-a-circle **Insert Anki flashcard** ribbon icon.
-3. Tap Basic, Reversible, List, Dump, Image Occlusion, or Cloze and enter the
-   remaining content at the cursor position selected by the plugin.
+1. Type the front of a card followed by `>>`.
+2. As soon as the second `>` is typed, choose Basic, Reversible, List, Dump,
+   Image Occlusion, or Cloze from the card picker. A single `>` does nothing.
+3. Enter the remaining content at the cursor position selected by the plugin.
 
-The same touch-friendly picker is available by long-pressing in the editor and
-choosing **Insert Anki flashcard …**. For one-tap access above the mobile
-keyboard, add **Obsidian Anki Bridge: Insert flashcard …** to Obsidian's
-configurable mobile editor toolbar.
+The same touch-friendly picker remains available by long-pressing in the editor
+and choosing **Insert Anki flashcard …**, through the command palette, or
+through Obsidian's configurable mobile editor toolbar. These alternatives are
+useful when selected text should become the front or a cloze deletion.
 
 On desktop, wait for automatic synchronization or run **Sync current note with
 Anki**. On mobile, that action safely queues the note for the next desktop
@@ -73,7 +72,7 @@ The mobile plugin does not attempt to contact `127.0.0.1:8765`, because Anki
 desktop and AnkiConnect do not run on a phone. Instead it records small,
 device-specific operations in its `mobile-outbox` directory:
 
-1. Create cards with the **Insert Anki flashcard** picker, then edit, rename, or
+1. Create cards by typing `>>` and choosing a format, then edit, rename, or
    remove them normally in Obsidian Mobile.
 2. Let the same complete vault synchronize to the computer through Obsidian
    Sync, Nextcloud, Syncthing, or another file synchronization tool.
@@ -111,8 +110,8 @@ Question ⇢%%oab:basic:v1%%Answer
 ```
 
 The convenient desktop input sequence is `Question >>`, `Tab`, then `Answer`.
-On mobile, type or select `Question`, open **Insert Anki flashcard**, and choose
-**Basic card**.
+On mobile, typing `Question >>` opens the card picker immediately; choose
+**Basic card** and type the answer.
 
 ### Reversible card
 
@@ -122,8 +121,8 @@ Creates both front-to-back and back-to-front cards:
 Term ⇄%%oab:reverse:v1%%Definition
 ```
 
-Choose **Reversible card** in the card picker. Desktop users can also open the
-picker by typing `>` and pressing `Tab`.
+Choose **Reversible card** in the card picker. On mobile the picker opens after
+typing `>>`; desktop users can open it by typing `>` and pressing `Tab`.
 
 ### Cloze card
 
