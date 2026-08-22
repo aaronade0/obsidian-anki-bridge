@@ -2,18 +2,19 @@
 
 ## Status
 
-Accepted for the 0.1 development preview.
+Accepted and extended with the serverless mobile outbox in 0.4.
 
 ## Decision
 
-The first transport talks to a local AnkiConnect endpoint. Parsing,
-registration, rendering, and reconciliation do not depend on AnkiConnect.
-They emit transport-neutral desired notes. A later HTTPS bridge can implement
-the same interface and forward those notes to a headless Anki client.
+The Anki transport talks to a local AnkiConnect endpoint on desktop. Mobile
+devices journal source changes into the synchronized plugin directory instead
+of contacting Anki. Desktop Obsidian later parses the synchronized source and
+applies it through the same local transport.
 
 ## Consequences
 
 - Windows desktop can be tested quickly with Anki running locally.
-- Mobile support remains a later transport addition.
+- Mobile creation and editing require no server or mobile Anki API.
+- Desktop Obsidian and Anki must run before queued mobile changes reach Anki.
 - The official Anki sync server is not treated as a card CRUD API.
 - No AnkiWeb credentials are stored in the Obsidian plugin.

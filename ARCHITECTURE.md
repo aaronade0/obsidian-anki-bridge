@@ -14,6 +14,12 @@ Markdown note
   -> desired Anki notes
   -> local AnkiConnect transport
   -> Anki models, decks, and notes
+
+Mobile Markdown change
+  -> device-separated outbox event
+  -> synchronized vault
+  -> desktop outbox processor
+  -> the same local AnkiConnect transport
 ```
 
 The editor decoration layer reads the same parser output. It does not maintain
@@ -117,13 +123,31 @@ arrive through filesystem or sync tools without an Obsidian rename event.
 - Retry happens on the next change/manual sync; success resolves the transient
   connection conflict.
 
-## Remote transport roadmap
+## Serverless mobile outbox
 
-The official Anki sync protocol is not a general card CRUD API. A future mobile
-version should therefore add an authenticated HTTPS bridge that exposes the
-same desired-note operations and runs next to a headless Anki instance (for
-example as a TrueNAS app/container). It should use a narrow API, per-vault keys,
-TLS, replay protection, a durable queue, and explicit conflict responses.
+Obsidian Mobile cannot use desktop AnkiConnect, and the official Anki sync
+protocol is not a general card CRUD API. Mobile devices therefore do not render
+or reconcile Anki notes. They write small schema-validated events into
+`mobile-outbox` below the synchronized plugin directory.
 
-AnkiWeb credentials should not be collected by the Obsidian plugin. The local
-transport remains available for Windows even after a remote bridge is added.
+Every device has a locally stored random device ID. Repeated changes from one
+device are coalesced, while events from separate devices use separate files so
+file-sync conflict resolution cannot silently overwrite them. The events refer
+only to source paths or already-confirmed deletion IDs; card content remains in
+the Markdown source and media remains in the vault.
+
+Desktop Obsidian processes the queue at startup and every 30 seconds. It also
+scans for changed registered notes at startup, covering edits that arrived
+while the desktop application was closed. An event is removed only after the
+local Anki operation succeeds. Connection failures leave it queued for retry.
+
+An explicit mobile whole-note deletion is represented by a tombstone event.
+This lets the desktop distinguish it from an unobserved filesystem disappearance
+and create the normal per-card pending deletions. A deletion confirmed on
+mobile is another queued operation; the desktop repeats every ownership and
+missing-state check immediately before touching Anki.
+
+Rendering remains a desktop responsibility. This prevents a mobile device
+without a particular visual plugin from degrading a previously valid Anki
+card. The plugin never collects AnkiWeb credentials and requires no hosted
+bridge service.

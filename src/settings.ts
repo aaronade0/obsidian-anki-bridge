@@ -1,4 +1,4 @@
-import { App, PluginSettingTab, Setting } from "obsidian";
+import { App, Platform, PluginSettingTab, Setting } from "obsidian";
 import type ObsidianAnkiBridge from "./main";
 
 export class BridgeSettingTab extends PluginSettingTab {
@@ -19,27 +19,36 @@ export class BridgeSettingTab extends PluginSettingTab {
       .setDesc("Opens the complete guide directly inside Obsidian.")
       .addButton((button) => button.setButtonText("Open guide").onClick(() => this.plugin.showHelp()));
 
-    new Setting(containerEl)
-      .setName("AnkiConnect address")
-      .setDesc("Default on Windows: http://127.0.0.1:8765")
-      .addText((text) => text
-        .setPlaceholder("http://127.0.0.1:8765")
-        .setValue(this.plugin.bridgeSettings.ankiConnectUrl)
-        .onChange(async (value) => {
-          this.plugin.bridgeSettings.ankiConnectUrl = value.trim();
-          await this.plugin.savePluginData();
-        }));
+    if (Platform.isMobile) {
+      new Setting(containerEl)
+        .setName("Mobile synchronization")
+        .setDesc(
+          `${this.plugin.queuedMobileActionCount} change(s) currently queued. ` +
+          "No mobile connection setup is needed: the synchronized vault carries these changes to desktop Obsidian, which uses local AnkiConnect."
+        );
+    } else {
+      new Setting(containerEl)
+        .setName("AnkiConnect address")
+        .setDesc("Default on Windows: http://127.0.0.1:8765")
+        .addText((text) => text
+          .setPlaceholder("http://127.0.0.1:8765")
+          .setValue(this.plugin.bridgeSettings.ankiConnectUrl)
+          .onChange(async (value) => {
+            this.plugin.bridgeSettings.ankiConnectUrl = value.trim();
+            await this.plugin.savePluginData();
+          }));
 
-    new Setting(containerEl)
-      .setName("AnkiConnect API key")
-      .setDesc("Optional; recommended when AnkiConnect requires a key.")
-      .addText((text) => {
-        text.inputEl.type = "password";
-        text.setValue(this.plugin.bridgeSettings.ankiConnectApiKey).onChange(async (value) => {
-          this.plugin.bridgeSettings.ankiConnectApiKey = value;
-          await this.plugin.savePluginData();
+      new Setting(containerEl)
+        .setName("AnkiConnect API key")
+        .setDesc("Optional; recommended when AnkiConnect requires a key.")
+        .addText((text) => {
+          text.inputEl.type = "password";
+          text.setValue(this.plugin.bridgeSettings.ankiConnectApiKey).onChange(async (value) => {
+            this.plugin.bridgeSettings.ankiConnectApiKey = value;
+            await this.plugin.savePluginData();
+          });
         });
-      });
+    }
 
     new Setting(containerEl)
       .setName("Anki deck root")
@@ -106,9 +115,11 @@ export class BridgeSettingTab extends PluginSettingTab {
           await this.plugin.savePluginData();
         }));
 
-    new Setting(containerEl)
-      .setName("Test connection")
-      .setDesc("Does not modify the Anki collection.")
-      .addButton((button) => button.setButtonText("Test").onClick(() => void this.plugin.testConnection()));
+    if (!Platform.isMobile) {
+      new Setting(containerEl)
+        .setName("Test connection")
+        .setDesc("Does not modify the Anki collection.")
+        .addButton((button) => button.setButtonText("Test").onClick(() => void this.plugin.testConnection()));
+    }
   }
 }

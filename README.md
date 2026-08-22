@@ -4,8 +4,11 @@ Obsidian Anki Bridge creates and updates Anki flashcards directly from an
 Obsidian vault. Card identities are stored in the plugin's private data file,
 so no generated IDs are written into Markdown notes.
 
-The current release is desktop-only and connects to a running Anki desktop
-application through [AnkiConnect](https://ankiweb.net/shared/info/2055492159).
+On desktop, the plugin connects to a running Anki application through
+[AnkiConnect](https://ankiweb.net/shared/info/2055492159). On mobile, changes
+are placed in a serverless outbox inside the synchronized plugin folder. The
+desktop processes that outbox automatically the next time Obsidian and Anki
+are open. No server, mobile Anki API, or additional account is required.
 
 ## Installation
 
@@ -18,8 +21,12 @@ current GitHub release manually:
    `<vault>/.obsidian/plugins/`.
 3. Reload Obsidian, open **Settings → Community plugins**, and enable
    **Obsidian Anki Bridge**.
-4. Install [AnkiConnect](https://ankiweb.net/shared/info/2055492159), start
-   Anki, and use **Test connection** in the bridge settings.
+4. On the desktop, install
+   [AnkiConnect](https://ankiweb.net/shared/info/2055492159), start Anki, and use
+   **Test connection** in the bridge settings.
+5. To create or edit cards on a phone or tablet, synchronize the complete vault
+   including `.obsidian/plugins/obsidian-anki-bridge`. No mobile connection
+   setup is needed.
 
 The release bundle includes the PDF.js worker required for PDF previews. Do
 not download only `main.js`; use the complete ZIP archive.
@@ -31,7 +38,9 @@ not download only `main.js`; use the complete ZIP archive.
 3. Press `Tab`. The bridge replaces `>>` with its collision-resistant card
    marker.
 4. Type the answer immediately. No leading space is inserted.
-5. Wait for automatic synchronization or run **Sync current note with Anki**.
+5. On desktop, wait for automatic synchronization or run **Sync current note
+   with Anki**. On mobile, the same action safely queues the note for the next
+   desktop synchronization.
 
 Type a single `>` and press `Tab` to choose from all available card formats.
 The same templates are available through the command palette.
@@ -41,6 +50,38 @@ The complete guide can also be opened inside Obsidian in three ways:
 - click the book icon in the left ribbon;
 - choose **Obsidian Anki Bridge: Open user guide** in the command palette; or
 - open the plugin settings and select **Open guide**.
+
+## Mobile workflow
+
+The mobile plugin does not attempt to contact `127.0.0.1:8765`, because Anki
+desktop and AnkiConnect do not run on a phone. Instead it records small,
+device-specific operations in its `mobile-outbox` directory:
+
+1. Create, edit, rename, or remove cards normally in Obsidian Mobile.
+2. Let the same complete vault synchronize to the computer through Obsidian
+   Sync, Nextcloud, Syncthing, or another file synchronization tool.
+3. Open desktop Obsidian and Anki. The bridge processes queued operations
+   automatically through the existing local AnkiConnect connection.
+4. Synchronize AnkiMobile or AnkiDroid normally to receive the resulting Anki
+   changes.
+
+The status bar shows how many operations are queued. Repeated edits to the same
+note on one device are coalesced. Events from different devices use separate
+files, preventing them from overwriting one another during file synchronization.
+Successfully applied events are removed automatically; failed events remain and
+are retried every 30 seconds while desktop Obsidian is open.
+
+Rich media and plugin-rendered visuals are rendered only on the desktop. A
+phone that does not have Excalidraw, Function Plot, Charts View, or another
+renderer installed therefore cannot replace a working Anki visual with a blank
+or fallback image.
+
+Removing a card inside a note is reconciled on the desktop and enters the usual
+confirmed-deletion flow. Deleting or renaming a whole note through Obsidian
+Mobile records an explicit outbox event, so the desktop does not confuse that
+action with an unknown filesystem move. A permanent Anki deletion can also be
+confirmed on mobile; the desktop rechecks the card's ownership and missing
+state before applying that queued confirmation.
 
 ## Card formats
 
@@ -223,15 +264,19 @@ Renames and unambiguous file moves also move the corresponding Anki cards.
 - The bridge updates only fields it owns and never changes scheduling data.
 - Native Image Occlusion masks and Anki-only annotations are never overwritten
   during routine synchronization.
+- Mobile devices never write directly to Anki or mutate the central card
+  registry; they only append validated, device-separated outbox operations.
 - Ambiguous mappings, missing renderers, and connection errors remain visible
   in the conflict report.
 - Nothing is deleted from Anki without explicit confirmation.
 
 ## Settings
 
-The settings page contains the AnkiConnect address and optional API key, deck
-root, vault-name override, automatic synchronization controls, path-audit
-interval, success notifications, connection test, and the in-app guide.
+On desktop, the settings page contains the AnkiConnect address and optional API
+key, deck root, vault-name override, automatic synchronization controls,
+path-audit interval, success notifications, connection test, and the in-app
+guide. On mobile, the local connection fields are replaced by the current
+outbox count because no mobile connection configuration is required.
 
 ## Development
 

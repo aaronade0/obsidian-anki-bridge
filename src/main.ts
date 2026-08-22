@@ -4,9 +4,11 @@ import {
   MarkdownView,
   Modal,
   Notice,
+  Platform,
   Plugin,
   type TAbstractFile,
   TFile,
+  TFolder,
   setIcon
 } from "obsidian";
 import {
@@ -31,6 +33,11 @@ import {
 } from "./parser";
 import { moveRegistryFile, reconcileFile } from "./registry";
 import { noteBelongsToCardKey } from "./ownership";
+import {
+  MobileOutbox,
+  createDeviceId,
+  type StoredMobileOutboxEvent
+} from "./mobile-outbox";
 import { BridgeSettingTab } from "./settings";
 import type {
   DesiredAnkiNote,
@@ -55,6 +62,9 @@ const DEFAULT_SETTINGS: PluginSettings = {
   showSuccessNotices: false
 };
 
+const DEVICE_ID_STORAGE_KEY = "obsidian-anki-bridge-device-id";
+const MOBILE_OUTBOX_POLL_INTERVAL_MS = 30_000;
+
 export default class ObsidianAnkiBridge extends Plugin {
   data: PluginData = emptyData();
   readonly parser = new FlashcardParser();
@@ -66,13 +76,34 @@ export default class ObsidianAnkiBridge extends Plugin {
   private modelsSignature = "";
   private lastFailureNoticeAt = 0;
   private visualRenderer!: ObsidianVisualRenderer;
+  private mobileOutbox!: MobileOutbox;
+  private queuedMobileActions = 0;
+  private processingMobileOutbox?: Promise<void>;
 
   get bridgeSettings(): PluginSettings {
     return this.data.settings;
   }
 
+  get queuedMobileActionCount(): number {
+    return this.queuedMobileActions;
+  }
+
   async onload(): Promise<void> {
     await this.loadPluginData();
+    const storedDeviceId = this.app.loadLocalStorage(DEVICE_ID_STORAGE_KEY);
+    const deviceId = typeof storedDeviceId === "string" && storedDeviceId.startsWith("device_")
+      ? storedDeviceId
+      : createDeviceId();
+    if (deviceId !== storedDeviceId) {
+      this.app.saveLocalStorage(DEVICE_ID_STORAGE_KEY, deviceId);
+    }
+    const pluginDirectory = this.manifest.dir ?? ".obsidian/plugins/obsidian-anki-bridge";
+    this.mobileOutbox = new MobileOutbox(
+      this.app.vault.adapter,
+      `${pluginDirectory}/mobile-outbox`,
+      deviceId
+    );
+    await this.refreshMobileOutboxCount();
     this.visualRenderer = new ObsidianVisualRenderer(
       this.app,
       this.manifest.dir ?? ".obsidian/plugins/obsidian-anki-bridge"
@@ -98,7 +129,9 @@ export default class ObsidianAnkiBridge extends Plugin {
         registered.missingReason !== undefined ||
         this.data.cards.some((candidate) => candidate.fileKey === registered.key && candidate.status === "missing")
       );
-      if (restoring) {
+      if (Platform.isMobile && (restoring || this.bridgeSettings.autoSync)) {
+        this.scheduleSync(file);
+      } else if (restoring) {
         void this.syncFileGuarded(file, false);
       } else if (this.bridgeSettings.autoSync) {
         this.scheduleSync(file);
@@ -111,22 +144,50 @@ export default class ObsidianAnkiBridge extends Plugin {
     }));
     this.registerEvent(this.app.vault.on("rename", (file, oldPath) => {
       if (file instanceof TFile && file.extension === "md") {
-        void this.handleRename(file, oldPath);
+        if (Platform.isMobile) {
+          void this.queueMobileRename(file, oldPath);
+        } else {
+          void this.handleRename(file, oldPath);
+        }
+      } else if (file instanceof TFolder) {
+        if (Platform.isMobile) {
+          void this.queueMobileFolderRename(file.path, oldPath);
+        } else {
+          void this.handleFolderRename(file.path, oldPath);
+        }
       }
     }));
     this.registerEvent(this.app.vault.on("delete", (file) => {
       if (file instanceof TFile && file.extension === "md") {
         const explicitlyDeletedInObsidian = this.consumeDeletionIntent(file.path);
-        void this.handleDelete(file.path, explicitlyDeletedInObsidian);
+        if (Platform.isMobile) {
+          if (explicitlyDeletedInObsidian) {
+            void this.queueMobileDelete(file.path);
+          }
+        } else {
+          void this.handleDelete(file.path, explicitlyDeletedInObsidian);
+        }
       }
     }));
 
     this.registerObsidianProtocolHandler("anki-bridge", (params) => void this.openSourceCard(params.card));
-    this.app.workspace.onLayoutReady(() => void this.auditMovedFiles());
-    this.registerInterval(window.setInterval(
-      () => void this.auditMovedFiles(),
-      Math.max(5, this.bridgeSettings.pathAuditIntervalMinutes) * 60_000
-    ));
+    this.app.workspace.onLayoutReady(() => {
+      if (Platform.isMobile) {
+        void this.refreshMobileOutboxCount();
+      } else {
+        void this.runDesktopCatchUp();
+      }
+    });
+    if (!Platform.isMobile) {
+      this.registerInterval(window.setInterval(
+        () => void this.auditMovedFiles(),
+        Math.max(5, this.bridgeSettings.pathAuditIntervalMinutes) * 60_000
+      ));
+      this.registerInterval(window.setInterval(
+        () => void this.processMobileOutbox(),
+        MOBILE_OUTBOX_POLL_INTERVAL_MS
+      ));
+    }
   }
 
   onunload(): void {
@@ -165,6 +226,13 @@ export default class ObsidianAnkiBridge extends Plugin {
   }
 
   async testConnection(): Promise<void> {
+    if (Platform.isMobile) {
+      new Notice(
+        "Mobile changes are queued in the synchronized vault and sent through desktop AnkiConnect when Obsidian and Anki are next open on a computer.",
+        12_000
+      );
+      return;
+    }
     try {
       const version = await this.client().ping();
       new Notice(`AnkiConnect is available (API version ${version}).`);
@@ -306,9 +374,254 @@ export default class ObsidianAnkiBridge extends Plugin {
     }
     const timer = window.setTimeout(() => {
       this.pendingTimers.delete(file.path);
-      void this.syncFileGuarded(file, false);
+      if (Platform.isMobile) {
+        void this.queueMobileUpsert(file, false);
+      } else {
+        void this.syncFileGuarded(file, false);
+      }
     }, this.bridgeSettings.autoSyncDelayMs);
     this.pendingTimers.set(file.path, timer);
+  }
+
+  private async queueMobileUpsert(file: TFile, manual: boolean): Promise<void> {
+    try {
+      const source = await this.app.vault.cachedRead(file);
+      const registered = this.data.files.some((candidate) => candidate.path === file.path);
+      if (!registered && !containsCanonicalMarker(source)) {
+        if (manual) {
+          new Notice("No Obsidian Anki cards were found in this note.");
+        }
+        return;
+      }
+      await this.mobileOutbox.enqueue({ type: "upsert", path: file.path });
+      await this.refreshMobileOutboxCount();
+      if (manual) {
+        new Notice(
+          "This note is queued. It will synchronize through local AnkiConnect when desktop Obsidian and Anki are next open.",
+          10_000
+        );
+      }
+    } catch (error) {
+      new Notice(
+        `The mobile change could not be written to the synchronized outbox: ${errorMessage(error)}`,
+        12_000
+      );
+    }
+  }
+
+  private async queueMobileRename(file: TFile, oldPath: string): Promise<void> {
+    this.clearPendingSync(oldPath);
+    try {
+      await this.mobileOutbox.enqueue({ type: "rename", oldPath, path: file.path });
+      await this.refreshMobileOutboxCount();
+    } catch (error) {
+      new Notice(`The mobile rename could not be queued: ${errorMessage(error)}`, 12_000);
+    }
+  }
+
+  private async queueMobileFolderRename(newFolderPath: string, oldFolderPath: string): Promise<void> {
+    try {
+      const registeredPaths = this.data.files
+        .map((file) => file.path)
+        .filter((path) => path.startsWith(`${oldFolderPath}/`));
+      for (const oldPath of registeredPaths) {
+        this.clearPendingSync(oldPath);
+        const path = `${newFolderPath}/${oldPath.slice(oldFolderPath.length + 1)}`;
+        await this.mobileOutbox.enqueue({ type: "rename", oldPath, path });
+      }
+      await this.refreshMobileOutboxCount();
+    } catch (error) {
+      new Notice(`The mobile folder rename could not be queued: ${errorMessage(error)}`, 12_000);
+    }
+  }
+
+  private async queueMobileDelete(path: string): Promise<void> {
+    this.clearPendingSync(path);
+    try {
+      await this.mobileOutbox.enqueue({ type: "delete", path });
+      await this.refreshMobileOutboxCount();
+      new Notice(
+        "The note deletion is queued. Its cards will appear as pending deletions after desktop processing; nothing is deleted from Anki automatically.",
+        10_000
+      );
+    } catch (error) {
+      new Notice(`The mobile deletion could not be queued: ${errorMessage(error)}`, 12_000);
+    }
+  }
+
+  private clearPendingSync(path: string): void {
+    const timer = this.pendingTimers.get(path);
+    if (timer !== undefined) {
+      window.clearTimeout(timer);
+      this.pendingTimers.delete(path);
+    }
+  }
+
+  private async refreshMobileOutboxCount(): Promise<void> {
+    const snapshot = await this.mobileOutbox.snapshot();
+    this.queuedMobileActions = snapshot.events.length;
+    this.updateStatus();
+  }
+
+  private async runDesktopCatchUp(): Promise<void> {
+    await this.processMobileOutbox();
+    await this.syncFilesChangedWhileClosed();
+    await this.auditMovedFiles();
+  }
+
+  private async syncFilesChangedWhileClosed(): Promise<void> {
+    if (!this.bridgeSettings.autoSync) {
+      return;
+    }
+    for (const file of this.app.vault.getMarkdownFiles()) {
+      const source = await this.app.vault.cachedRead(file);
+      const registered = this.data.files.find((candidate) => candidate.path === file.path);
+      const needsSync = registered
+        ? registered.contentHash !== stableHash(source)
+        : containsCanonicalMarker(source);
+      if (needsSync) {
+        await this.syncFileGuarded(file, false);
+        await yieldToUi();
+      }
+    }
+  }
+
+  async processMobileOutbox(): Promise<void> {
+    if (Platform.isMobile) {
+      await this.refreshMobileOutboxCount();
+      return;
+    }
+    if (this.processingMobileOutbox) {
+      return this.processingMobileOutbox;
+    }
+    const run = this.processMobileOutboxNow().catch(async (error) => {
+      this.recordConflict(
+        "MOBILE_OUTBOX_UNAVAILABLE",
+        `The synchronized mobile outbox could not be read: ${errorMessage(error)}`
+      );
+      await this.savePluginData();
+    }).finally(() => {
+      this.processingMobileOutbox = undefined;
+    });
+    this.processingMobileOutbox = run;
+    return run;
+  }
+
+  private async processMobileOutboxNow(): Promise<void> {
+    const snapshot = await this.mobileOutbox.snapshot();
+    const hadUnavailableConflict = this.data.conflicts.some((conflict) =>
+      conflict.code === "MOBILE_OUTBOX_UNAVAILABLE" && conflict.resolvedAt === undefined
+    );
+    this.resolveConflict("MOBILE_OUTBOX_UNAVAILABLE");
+    const invalidPaths = new Set(snapshot.invalidFiles);
+    let invalidConflictChanged = false;
+    for (const conflict of this.data.conflicts) {
+      if (conflict.code === "MOBILE_OUTBOX_INVALID" && conflict.resolvedAt === undefined &&
+          conflict.path && !invalidPaths.has(conflict.path)) {
+        conflict.resolvedAt = Date.now();
+        invalidConflictChanged = true;
+      }
+    }
+    for (const invalidPath of snapshot.invalidFiles) {
+      this.recordConflict(
+        "MOBILE_OUTBOX_INVALID",
+        "A mobile outbox entry is invalid and was preserved for diagnosis instead of being executed.",
+        invalidPath
+      );
+      invalidConflictChanged = true;
+    }
+    if (invalidConflictChanged || hadUnavailableConflict) {
+      await this.savePluginData();
+    }
+
+    for (const [index, stored] of snapshot.events.entries()) {
+      try {
+        const handled = await this.processMobileOutboxEvent(stored, snapshot.events.slice(index + 1));
+        if (!handled) {
+          continue;
+        }
+        await this.mobileOutbox.remove(stored.storagePath);
+        const hadProcessingConflict = this.data.conflicts.some((conflict) =>
+          conflict.code === "MOBILE_OUTBOX_FAILED" &&
+          conflict.path === stored.storagePath &&
+          conflict.resolvedAt === undefined
+        );
+        this.resolveConflict("MOBILE_OUTBOX_FAILED", stored.storagePath);
+        if (hadProcessingConflict) {
+          await this.savePluginData();
+        }
+      } catch (error) {
+        this.recordConflict(
+          "MOBILE_OUTBOX_FAILED",
+          `A queued mobile change could not yet be processed: ${errorMessage(error)}`,
+          stored.storagePath
+        );
+        await this.savePluginData();
+      }
+    }
+    await this.refreshMobileOutboxCount();
+  }
+
+  private async processMobileOutboxEvent(
+    stored: StoredMobileOutboxEvent,
+    laterEvents: StoredMobileOutboxEvent[]
+  ): Promise<boolean> {
+    const { event } = stored;
+    if (event.type === "upsert") {
+      const file = this.app.vault.getAbstractFileByPath(event.path);
+      if (!(file instanceof TFile) || file.extension !== "md") {
+        return laterEvents.some(({ event: later }) =>
+          later.type === "delete" && later.path === event.path ||
+          later.type === "rename" && later.oldPath === event.path
+        );
+      }
+      return (await this.syncFileGuarded(file, false)) !== undefined;
+    }
+
+    if (event.type === "rename") {
+      const file = this.app.vault.getAbstractFileByPath(event.path);
+      if (!(file instanceof TFile) || file.extension !== "md") {
+        const superseded = laterEvents.some(({ event: later }) =>
+          later.type === "delete" && later.path === event.path ||
+          later.type === "rename" && later.oldPath === event.path
+        );
+        if (superseded) {
+          const registered = this.data.files.find((candidate) => candidate.path === event.oldPath);
+          if (registered) {
+            moveRegistryFile(registered, this.data.cards, event.path);
+            await this.savePluginData();
+          }
+        }
+        return superseded;
+      }
+      const registered = this.data.files.find((candidate) => candidate.path === event.oldPath);
+      if (registered) {
+        moveRegistryFile(registered, this.data.cards, event.path);
+        this.resolveConflict("FILE_MISSING", event.oldPath);
+        this.resolveConflict("FILE_MOVE_AMBIGUOUS", event.oldPath);
+        await this.savePluginData();
+      }
+      return (await this.syncFileGuarded(file, false)) !== undefined;
+    }
+
+    if (event.type === "delete") {
+      await this.handleDelete(event.path, true);
+      return true;
+    }
+
+    const conflict = this.data.conflicts.find((candidate) =>
+      candidate.key === event.conflictKey &&
+      candidate.cardKey === event.cardKey &&
+      candidate.resolvedAt === undefined &&
+      isRemovalConflict(candidate)
+    );
+    const target = conflict ? findRegistryTarget(this.data.cards, event.cardKey) : undefined;
+    const stillMissing = target?.child ? target.child.status === "missing" : target?.card.status === "missing";
+    if (!conflict || !target || !stillMissing) {
+      return true;
+    }
+    await this.deleteRemovedCard(event.conflictKey);
+    return true;
   }
 
   private async syncCurrentFile(manual: boolean): Promise<void> {
@@ -317,10 +630,32 @@ export default class ObsidianAnkiBridge extends Plugin {
       new Notice("No Markdown note is open.");
       return;
     }
+    if (Platform.isMobile) {
+      await this.queueMobileUpsert(file, manual);
+      return;
+    }
     await this.syncFileGuarded(file, manual);
   }
 
   private async syncAllFiles(): Promise<void> {
+    if (Platform.isMobile) {
+      let queued = 0;
+      for (const file of this.app.vault.getMarkdownFiles()) {
+        const registered = this.data.files.some((candidate) => candidate.path === file.path);
+        const source = await this.app.vault.cachedRead(file);
+        if (!registered && !containsCanonicalMarker(source)) {
+          continue;
+        }
+        await this.queueMobileUpsert(file, false);
+        queued += 1;
+        await yieldToUi();
+      }
+      new Notice(
+        `Obsidian Anki Bridge: ${queued} note(s) queued for desktop Anki synchronization.`,
+        10_000
+      );
+      return;
+    }
     new Notice("Obsidian Anki Bridge: Background synchronization started.");
     let synced = 0;
     let failed = 0;
@@ -338,6 +673,10 @@ export default class ObsidianAnkiBridge extends Plugin {
   }
 
   private async syncFileGuarded(file: TFile, manual: boolean): Promise<SyncSummary | undefined> {
+    if (Platform.isMobile) {
+      await this.queueMobileUpsert(file, manual);
+      return emptySummary(file.path);
+    }
     const current = this.activeSyncs.get(file.path);
     if (current) {
       return current;
@@ -569,6 +908,20 @@ export default class ObsidianAnkiBridge extends Plugin {
     await this.syncFileGuarded(file, false);
   }
 
+  private async handleFolderRename(newFolderPath: string, oldFolderPath: string): Promise<void> {
+    const registeredPaths = this.data.files
+      .map((file) => file.path)
+      .filter((path) => path.startsWith(`${oldFolderPath}/`));
+    for (const oldPath of registeredPaths) {
+      const path = `${newFolderPath}/${oldPath.slice(oldFolderPath.length + 1)}`;
+      const file = this.app.vault.getAbstractFileByPath(path);
+      if (file instanceof TFile && file.extension === "md") {
+        await this.handleRename(file, oldPath);
+        await yieldToUi();
+      }
+    }
+  }
+
   private async handleDelete(path: string, explicitlyDeletedInObsidian: boolean): Promise<void> {
     const registered = this.data.files.find((candidate) => candidate.path === path);
     if (!registered) {
@@ -623,6 +976,12 @@ export default class ObsidianAnkiBridge extends Plugin {
   }
 
   async auditMovedFiles(manual = false): Promise<void> {
+    if (Platform.isMobile) {
+      if (manual) {
+        new Notice("Path auditing runs on desktop, where the synchronized mobile outbox can be reconciled with Anki.");
+      }
+      return;
+    }
     const existingPaths = new Set(this.app.vault.getMarkdownFiles().map((file) => file.path));
     const missing = this.data.files.filter(
       (file) => file.missingReason !== "deleted-in-obsidian" && !existingPaths.has(file.path)
@@ -704,6 +1063,10 @@ export default class ObsidianAnkiBridge extends Plugin {
   }
 
   private async openCardAtCursor(editor: Editor): Promise<void> {
+    if (Platform.isMobile) {
+      new Notice("Opening the Anki browser is available only through desktop AnkiConnect.");
+      return;
+    }
     const file = this.app.workspace.getActiveFile();
     if (!(file instanceof TFile)) {
       return;
@@ -744,6 +1107,16 @@ export default class ObsidianAnkiBridge extends Plugin {
     const isStillMissing = target?.child ? target.child.status === "missing" : target?.card.status === "missing";
     if (!target || !isStillMissing) {
       throw new Error("The card is present in the note again or is no longer registered.");
+    }
+
+    if (Platform.isMobile) {
+      await this.mobileOutbox.enqueue({
+        type: "confirm-delete",
+        conflictKey: conflict.key,
+        cardKey: conflict.cardKey
+      });
+      await this.refreshMobileOutboxCount();
+      return -1;
     }
 
     const ownedNotes = target.child
@@ -876,12 +1249,19 @@ export default class ObsidianAnkiBridge extends Plugin {
     const unresolved = unresolvedConflicts(this.data.conflicts);
     this.statusEl.empty();
     const icon = this.statusEl.createSpan({ cls: "oab-status-icon" });
-    setIcon(icon, unresolved.length > 0 ? "alert-triangle" : "badge-check");
-    this.statusEl.createSpan({ text: unresolved.length > 0 ? ` Anki: ${unresolved.length}` : " Anki bereit" });
+    setIcon(icon, unresolved.length > 0 ? "alert-triangle" : this.queuedMobileActions > 0 ? "clock" : "badge-check");
+    const parts: string[] = [];
+    if (unresolved.length > 0) {
+      parts.push(`${unresolved.length} conflict(s)`);
+    }
+    if (this.queuedMobileActions > 0) {
+      parts.push(`${this.queuedMobileActions} queued`);
+    }
+    this.statusEl.createSpan({ text: parts.length > 0 ? ` Anki: ${parts.join(" · ")}` : " Anki ready" });
     this.statusEl.toggleClass("has-conflicts", unresolved.length > 0);
-    this.statusEl.setAttr("aria-label", unresolved.length > 0
-      ? `${unresolved.length} conflict(s) or pending deletion(s) – click to open`
-      : "No unresolved Obsidian Anki conflicts or deletions");
+    this.statusEl.setAttr("aria-label", parts.length > 0
+      ? `${parts.join(", ")} – click for details`
+      : "No unresolved Obsidian Anki conflicts, deletions, or queued mobile changes");
   }
 
   showConflictReport(): void {
@@ -906,6 +1286,13 @@ class ConflictModal extends Modal {
     this.contentEl.empty();
     this.contentEl.createEl("h2", { text: "Obsidian Anki Bridge – Conflicts and deletions" });
     const conflicts = unresolvedConflicts(this.plugin.data.conflicts);
+    if (this.plugin.queuedMobileActionCount > 0) {
+      this.contentEl.createEl("p", {
+        text: Platform.isMobile
+          ? `${this.plugin.queuedMobileActionCount} change(s) are safely queued in the synchronized vault. Desktop Obsidian will send them through local AnkiConnect.`
+          : `${this.plugin.queuedMobileActionCount} mobile change(s) are waiting for local AnkiConnect and will be retried automatically.`
+      });
+    }
     if (conflicts.length === 0) {
       this.contentEl.createEl("p", { text: "No unresolved conflicts or pending deletions." });
       return;
@@ -970,7 +1357,9 @@ class DeleteConfirmationModal extends Modal {
       confirm.setText("Deleting …");
       void this.plugin.deleteRemovedCard(this.conflict.key).then((deletedNotes) => {
         new Notice(
-          deletedNotes === 0
+          deletedNotes === -1
+            ? "Deletion confirmed and queued. Desktop AnkiConnect will verify and apply it when available."
+            : deletedNotes === 0
             ? "The card was already absent from Anki; the registry entry was cleaned up."
             : `${deletedNotes} Anki note(s) permanently deleted.`,
           8_000

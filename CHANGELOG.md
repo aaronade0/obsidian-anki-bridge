@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.4.0 - Serverless mobile outbox
+
+- Enabled the plugin on Obsidian Mobile without requiring AnkiConnect on the
+  phone.
+- Added a device-separated outbox that travels with the synchronized vault and
+  is processed through local AnkiConnect when desktop Obsidian and Anki run.
+- Added automatic desktop catch-up after the application was closed.
+- Preserved explicit mobile note deletions as safe pending deletions instead of
+  misclassifying them as ambiguous filesystem changes.
+- Allowed deletion confirmations to be queued on mobile and revalidated on the
+  desktop immediately before Anki is changed.
+- Kept media and plugin-specific visual rendering on the desktop, avoiding
+  blank or degraded cards when a renderer is unavailable on mobile.
+- Added durable queue status, retry behaviour, validation, and integration
+  coverage for mobile creation, editing, deletion quarantine, and confirmed
+  deletion.
+
 ## 0.3.0 - Native Image Occlusion and reliable plugin visuals
 
 - Switched image-marker cards to Anki's built-in Image Occlusion note type.

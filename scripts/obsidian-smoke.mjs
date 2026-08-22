@@ -425,6 +425,47 @@ const result = await command("Runtime.evaluate", {
     await plugin.savePluginData();
     await globalThis.app.vault.delete(recreatedAmbiguousFile);
 
+    const mobileOutboxPath = "Temporary Mobile Outbox " + Date.now() + ".md";
+    const mobileOutboxSource = "Queued on mobile ⇢%%oab:basic:v1%%First desktop answer";
+    const mobileOutboxFile = await globalThis.app.vault.create(mobileOutboxPath, mobileOutboxSource);
+    await plugin.mobileOutbox.enqueue({ type: "upsert", path: mobileOutboxPath });
+    await plugin.processMobileOutbox();
+    const mobileOutboxCard = plugin.data.cards.find((card) => card.sourcePath === mobileOutboxPath);
+    if (!mobileOutboxCard?.ankiNoteId) throw new Error("Mobile outbox did not create its Anki note.");
+    const mobileCreatedNote = await plugin.client().noteInfo(mobileOutboxCard.ankiNoteId);
+    const mobileOutboxCreated = mobileCreatedNote?.fields?.Back?.value?.includes("First desktop answer") === true;
+    const editedMobileOutboxSource = "Queued on mobile ⇢%%oab:basic:v1%%Edited on the phone";
+    await globalThis.app.vault.modify(mobileOutboxFile, editedMobileOutboxSource);
+    await plugin.mobileOutbox.enqueue({ type: "upsert", path: mobileOutboxPath });
+    await plugin.processMobileOutbox();
+    const mobileUpdatedNote = await plugin.client().noteInfo(mobileOutboxCard.ankiNoteId);
+    const mobileOutboxUpdated = mobileUpdatedNote?.fields?.Back?.value?.includes("Edited on the phone") === true;
+
+    await globalThis.app.vault.delete(mobileOutboxFile);
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      if (plugin.data.conflicts.some((conflict) =>
+        conflict.code === "FILE_MISSING" && conflict.path === mobileOutboxPath && conflict.resolvedAt === undefined
+      )) break;
+      await sleep(50);
+    }
+    await plugin.mobileOutbox.enqueue({ type: "delete", path: mobileOutboxPath });
+    await plugin.processMobileOutbox();
+    const mobileRemovalConflict = plugin.data.conflicts.find((conflict) =>
+      conflict.code === "CARD_REMOVED" && conflict.cardKey === mobileOutboxCard.key && conflict.resolvedAt === undefined
+    );
+    const mobileDeleteQuarantined = Boolean(mobileRemovalConflict) && Boolean(await plugin.client().noteInfo(mobileOutboxCard.ankiNoteId));
+    if (!mobileRemovalConflict) throw new Error("Mobile deletion was not converted into a pending deletion.");
+    await plugin.mobileOutbox.enqueue({
+      type: "confirm-delete",
+      conflictKey: mobileRemovalConflict.key,
+      cardKey: mobileOutboxCard.key
+    });
+    await plugin.processMobileOutbox();
+    const mobileConfirmedDeletionApplied = !(await plugin.client().noteInfo(mobileOutboxCard.ankiNoteId)) &&
+      !plugin.data.cards.some((card) => card.key === mobileOutboxCard.key) &&
+      !plugin.data.files.some((entry) => entry.path === mobileOutboxPath);
+    const mobileOutboxDrained = (await plugin.mobileOutbox.snapshot()).events.length === 0;
+
     return {
       pluginLoaded: true,
       summary,
@@ -473,6 +514,11 @@ const result = await command("Runtime.evaluate", {
       ambiguousAnkiNoteRetained,
       ambiguousHasNoDeleteButton,
       ambiguousRestoreRecovered,
+      mobileOutboxCreated,
+      mobileOutboxUpdated,
+      mobileDeleteQuarantined,
+      mobileConfirmedDeletionApplied,
+      mobileOutboxDrained,
       markerDecorations: document.querySelectorAll(".oab-card-marker").length,
       fieldDecorations: document.querySelectorAll(".oab-card-field").length,
       unresolvedConflicts: plugin.data.conflicts.filter((conflict) => conflict.resolvedAt === undefined)
@@ -558,6 +604,8 @@ if (!value?.pluginLoaded || value.summary?.desiredNotes !== 7 || value.noteIds?.
     value.directDeletedNotes !== 2 || !value.directAnkiNotesDeleted || !value.directRegistryCleared ||
     !value.ambiguousConflictOnly || !value.ambiguousAnkiNoteRetained ||
     !value.ambiguousHasNoDeleteButton || !value.ambiguousRestoreRecovered ||
+    !value.mobileOutboxCreated || !value.mobileOutboxUpdated || !value.mobileDeleteQuarantined ||
+    !value.mobileConfirmedDeletionApplied || !value.mobileOutboxDrained ||
     !value.shortcutExpansion || value.shortcutBack !== "Answer") {
   throw new Error(`Unexpected Obsidian smoke-test result: ${JSON.stringify(value)}`);
 }
