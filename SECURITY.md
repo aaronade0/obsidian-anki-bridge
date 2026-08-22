@@ -3,8 +3,9 @@
 ## Reporting
 
 Do not open a public issue for vulnerabilities that could expose AnkiConnect,
-vault content, media, API keys, or remote-bridge credentials. Contact the
-maintainers privately before disclosure.
+vault content, media, API keys, or remote-bridge credentials. Use
+**Security → Report a vulnerability** in this GitHub repository so the report
+stays private until a coordinated disclosure is ready.
 
 ## Current boundary
 
