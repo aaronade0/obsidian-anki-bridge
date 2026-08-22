@@ -1,0 +1,80 @@
+.oab-card-field {
+  background: color-mix(in srgb, var(--background-modifier-border) 52%, transparent);
+  border-radius: var(--radius-s);
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+  padding: 0.08em 0.18em;
+}
+
+.oab-card-front {
+  border-bottom: 1px solid color-mix(in srgb, var(--interactive-accent) 45%, transparent);
+}
+
+.oab-card-back,
+.oab-card-list-item {
+  background: color-mix(in srgb, var(--interactive-accent) 8%, var(--background-modifier-border) 45%);
+}
+
+.oab-card-marker {
+  color: var(--interactive-accent);
+  background: color-mix(in srgb, var(--interactive-accent) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--interactive-accent) 35%, transparent);
+  border-radius: 0.35em;
+  font-weight: 650;
+  padding: 0 0.16em;
+}
+
+.oab-status {
+  cursor: pointer;
+}
+
+.oab-status.has-conflicts {
+  color: var(--text-error);
+  font-weight: 600;
+}
+
+.oab-status-icon,
+.oab-status-icon svg {
+  display: inline-block;
+  height: 1em;
+  width: 1em;
+  vertical-align: -0.15em;
+}
+
+.oab-conflict {
+  border-left: 3px solid var(--text-warning);
+  background: var(--background-secondary);
+  margin: 0.8rem 0;
+  padding: 0.8rem 1rem;
+}
+
+.oab-conflict-error {
+  border-left-color: var(--text-error);
+}
+
+.oab-conflict p {
+  margin: 0.35rem 0;
+}
+
+.oab-conflict blockquote {
+  margin: 0.7rem 0;
+  max-height: 8rem;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+
+.oab-conflict button {
+  margin-top: 0.8rem;
+}
+
+.oab-modal-actions {
+  display: flex;
+  gap: 0.7rem;
+  justify-content: flex-end;
+  margin-top: 1.2rem;
+}
+
+.oab-help {
+  max-height: 75vh;
+  overflow: auto;
+}

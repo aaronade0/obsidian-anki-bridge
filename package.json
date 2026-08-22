@@ -1,0 +1,40 @@
+{
+  "name": "obsidian-anki-bridge",
+  "version": "0.3.0",
+  "private": true,
+  "description": "A safe, incremental Obsidian to Anki flashcard bridge.",
+  "type": "module",
+  "scripts": {
+    "build": "node esbuild.config.mjs production",
+    "dev": "node esbuild.config.mjs development",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:anki": "node scripts/anki-integration.mjs",
+    "test:obsidian": "node scripts/obsidian-smoke.mjs",
+    "test:visual": "node scripts/visual-integration.mjs",
+    "check": "npm run typecheck && npm test && npm run build",
+    "deploy:test": "node scripts/deploy.mjs test",
+    "deploy:vault": "node scripts/deploy.mjs vault"
+  },
+  "dependencies": {
+    "html-to-image": "^1.11.13",
+    "markdown-it": "^14.1.0",
+    "pdfjs-dist": "^5.4.149"
+  },
+  "devDependencies": {
+    "@codemirror/state": "6.5.0",
+    "@codemirror/view": "6.38.6",
+    "@types/markdown-it": "^14.1.2",
+    "@types/node": "^24.3.0",
+    "builtin-modules": "^5.0.0",
+    "esbuild": "^0.25.9",
+    "fast-check": "^4.3.0",
+    "obsidian": "1.13.1",
+    "typescript": "^5.9.2",
+    "vitest": "^3.2.4"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

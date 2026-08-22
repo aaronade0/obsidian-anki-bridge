@@ -1,0 +1,30 @@
+name: Bug report
+description: Report a reproducible parser, editor, or sync problem.
+body:
+  - type: markdown
+    attributes:
+      value: Do not include private note content, credentials, or AnkiConnect API keys.
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: Plugin, Obsidian, Anki, and AnkiConnect versions.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected result
+    validations:
+      required: true
+  - type: textarea
+    id: conflicts
+    attributes:
+      label: Conflict code or error
+      description: Redact paths and private content before posting.

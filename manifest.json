@@ -1,0 +1,9 @@
+{
+  "id": "obsidian-anki-bridge",
+  "name": "Obsidian Anki Bridge",
+  "version": "0.3.0",
+  "minAppVersion": "1.6.6",
+  "description": "Creates and synchronizes reliable Anki flashcards without generated IDs in Obsidian notes.",
+  "author": "Aaron Ade and A.D.A.M.",
+  "isDesktopOnly": true
+}

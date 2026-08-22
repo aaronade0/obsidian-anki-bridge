@@ -1,0 +1,15 @@
+node_modules/
+main.js
+*.map
+coverage/
+.DS_Store
+test-vault/.obsidian/plugins/obsidian-anki-bridge/main.js
+test-vault/.obsidian/plugins/obsidian-anki-bridge/manifest.json
+test-vault/.obsidian/plugins/obsidian-anki-bridge/styles.css
+test-vault/.obsidian/plugins/obsidian-anki-bridge/README.md
+test-vault/.obsidian/plugins/obsidian-anki-bridge/data.json
+test-vault/.obsidian/plugins/obsidian-anki-bridge/pdf.worker.min.mjs
+test-vault/.obsidian/app.json
+test-vault/.obsidian/appearance.json
+test-vault/.obsidian/core-plugins.json
+test-vault/.obsidian/workspace.json
