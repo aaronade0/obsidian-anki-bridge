@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.4.1 - Touch-friendly mobile card creation
+
+- Added one touch-friendly card picker for Basic, Reversible, List, Dump,
+  native Image Occlusion, and Cloze cards.
+- Exposed the picker through a ribbon icon, the editor context menu, the
+  command palette, and Obsidian's configurable mobile editor toolbar.
+- Preserved selected text as the card front or wrapped it as a cloze instead of
+  discarding it.
+- Positioned the cursor inside List, Dump, and empty Cloze templates so mobile
+  typing can continue immediately.
+- Added the previously missing individual Image Occlusion insertion command.
+
 ## 0.4.0 - Serverless mobile outbox
 
 - Enabled the plugin on Obsidian Mobile without requiring AnkiConnect on the

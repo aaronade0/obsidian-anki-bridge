@@ -18,18 +18,15 @@ import {
 } from "./anki-connect";
 import { deriveDeckName } from "./deck";
 import { buildDesiredNotes } from "./desired-notes";
-import { createEditorExtensions } from "./editor";
+import { createEditorExtensions, openCardTypeModal } from "./editor";
+import { cardTemplateChoice, insertCardTemplate } from "./card-templates";
 import { stableHash } from "./hash";
 import {
-  BASIC_MARKER,
-  CLOZE_CLOSE_MARKER,
-  CLOZE_OPEN_MARKER,
   DUMP_END_MARKER,
   DUMP_START_MARKER,
   FlashcardParser,
   LIST_END_MARKER,
-  LIST_START_MARKER,
-  REVERSE_MARKER
+  LIST_START_MARKER
 } from "./parser";
 import { moveRegistryFile, reconcileFile } from "./registry";
 import { noteBelongsToCardKey } from "./ownership";
@@ -115,9 +112,16 @@ export default class ObsidianAnkiBridge extends Plugin {
 
     this.addSettingTab(new BridgeSettingTab(this.app, this));
     this.registerEditorExtension(createEditorExtensions(this.app, this.parser));
+    this.addRibbonIcon("plus-circle", "Insert Anki flashcard", () => this.openCardTypePicker());
     this.addRibbonIcon("refresh-cw", "Sync Obsidian flashcards", () => void this.syncCurrentFile(true));
     this.addRibbonIcon("book-open", "Obsidian Anki Bridge – Open user guide", () => this.showHelp());
     this.registerCommands();
+    this.registerEvent(this.app.workspace.on("editor-menu", (menu, editor) => {
+      menu.addItem((item) => item
+        .setTitle("Insert Anki flashcard …")
+        .setIcon("plus-circle")
+        .onClick(() => openCardTypeModal(this.app, editor)));
+    }));
     this.installDeletionOriginTracking();
 
     this.registerEvent(this.app.vault.on("create", (file) => {
@@ -247,6 +251,12 @@ export default class ObsidianAnkiBridge extends Plugin {
 
   private registerCommands(): void {
     this.addCommand({
+      id: "insert-flashcard",
+      name: "Insert flashcard …",
+      icon: "plus-circle",
+      editorCallback: (editor) => openCardTypeModal(this.app, editor)
+    });
+    this.addCommand({
       id: "sync-current-note",
       name: "Sync current note with Anki",
       callback: () => void this.syncCurrentFile(true)
@@ -279,28 +289,48 @@ export default class ObsidianAnkiBridge extends Plugin {
     this.addCommand({
       id: "insert-basic-card",
       name: "Insert basic card",
-      editorCallback: (editor) => editor.replaceSelection(BASIC_MARKER)
+      icon: "arrow-right",
+      editorCallback: (editor) => insertCardTemplate(editor, cardTemplateChoice("basic"))
     });
     this.addCommand({
       id: "insert-reverse-card",
       name: "Insert reversible card",
-      editorCallback: (editor) => editor.replaceSelection(REVERSE_MARKER)
+      icon: "arrow-left-right",
+      editorCallback: (editor) => insertCardTemplate(editor, cardTemplateChoice("reverse"))
     });
     this.addCommand({
       id: "insert-list-card",
       name: "Insert list card",
-      editorCallback: (editor) => editor.replaceSelection(`${LIST_START_MARKER}\n- \n${LIST_END_MARKER}`)
+      icon: "list",
+      editorCallback: (editor) => insertCardTemplate(editor, cardTemplateChoice("list"))
     });
     this.addCommand({
       id: "insert-dump-card",
       name: "Insert dump card",
-      editorCallback: (editor) => editor.replaceSelection(`${DUMP_START_MARKER}\n\n${DUMP_END_MARKER}`)
+      icon: "align-left",
+      editorCallback: (editor) => insertCardTemplate(editor, cardTemplateChoice("dump"))
+    });
+    this.addCommand({
+      id: "insert-image-card",
+      name: "Insert Image Occlusion card",
+      icon: "image",
+      editorCallback: (editor) => insertCardTemplate(editor, cardTemplateChoice("image"))
     });
     this.addCommand({
       id: "insert-cloze",
       name: "Mark selection as cloze deletion",
-      editorCallback: (editor) => editor.replaceSelection(`${CLOZE_OPEN_MARKER}${editor.getSelection()}${CLOZE_CLOSE_MARKER}`)
+      icon: "brackets",
+      editorCallback: (editor) => insertCardTemplate(editor, cardTemplateChoice("cloze"))
     });
+  }
+
+  private openCardTypePicker(): void {
+    const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+    if (!view) {
+      new Notice("Open a Markdown note before inserting an Anki flashcard.");
+      return;
+    }
+    openCardTypeModal(this.app, view.editor);
   }
 
   private installDeletionOriginTracking(): void {

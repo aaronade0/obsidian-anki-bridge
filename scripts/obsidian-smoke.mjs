@@ -586,6 +586,51 @@ value.shortcutExpansion = shortcutResult.result?.value?.expanded === true;
 value.shortcutBack = shortcutResult.result?.value?.parsedBack;
 value.shortcutTail = shortcutResult.result?.value?.tail;
 value.shortcutDebug = shortcutResult.exceptionDetails?.exception?.description ?? shortcutResult.result?.description;
+const touchPickerResult = await command("Runtime.evaluate", {
+  expression: `(async () => {
+    const editor = globalThis.app.workspace.activeLeaf?.view?.editor;
+    const file = globalThis.app.vault.getAbstractFileByPath(${JSON.stringify(shortcutState.path)});
+    if (!editor || !file) throw new Error("No active Markdown editor for touch picker test.");
+    const original = ${JSON.stringify(shortcutState.original)};
+    const candidate = original + "\\nMobile prompt ";
+    editor.setValue(candidate);
+    editor.setCursor(editor.offsetToPos(candidate.length));
+    editor.focus();
+    const commandId = "obsidian-anki-bridge:insert-flashcard";
+    const registeredCommand = globalThis.app.commands.commands[commandId];
+    const ribbonVisible = Boolean(document.querySelector('[aria-label="Insert Anki flashcard"]'));
+    const executed = globalThis.app.commands.executeCommandById(commandId);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    const picker = document.querySelector(".oab-card-picker");
+    const choices = [...(picker?.querySelectorAll(".suggestion-item") ?? [])];
+    const basic = choices.find((choice) => choice.textContent?.includes("Basic card"));
+    basic?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    editor.replaceSelection("Mobile answer");
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const tail = editor.getValue().slice(-100);
+    const parsed = globalThis.app.plugins.plugins["obsidian-anki-bridge"].parser.parse(editor.getValue()).at(-1);
+    editor.setValue(original);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    await globalThis.app.vault.modify(file, original);
+    return {
+      commandRegistered: Boolean(registeredCommand),
+      commandHasIcon: registeredCommand?.icon === "plus-circle",
+      ribbonVisible,
+      executed,
+      pickerVisible: Boolean(picker),
+      choiceCount: choices.length,
+      inserted: tail.endsWith("Mobile prompt ⇢%%oab:basic:v1%%Mobile answer"),
+      parsedKind: parsed?.kind,
+      parsedBack: parsed?.back,
+      tail
+    };
+  })()`,
+  awaitPromise: true,
+  returnByValue: true
+});
+value.touchPicker = touchPickerResult.result?.value;
+value.touchPickerDebug = touchPickerResult.exceptionDetails?.exception?.description ?? touchPickerResult.result?.description;
 socket.close();
 if (!value?.pluginLoaded || value.summary?.desiredNotes !== 7 || value.noteIds?.length !== 7 ||
     !value.movedDeckVerified || !value.externalMoveRecovered || !value.failureVisible ||
@@ -606,7 +651,12 @@ if (!value?.pluginLoaded || value.summary?.desiredNotes !== 7 || value.noteIds?.
     !value.ambiguousHasNoDeleteButton || !value.ambiguousRestoreRecovered ||
     !value.mobileOutboxCreated || !value.mobileOutboxUpdated || !value.mobileDeleteQuarantined ||
     !value.mobileConfirmedDeletionApplied || !value.mobileOutboxDrained ||
-    !value.shortcutExpansion || value.shortcutBack !== "Answer") {
+    !value.shortcutExpansion || value.shortcutBack !== "Answer" ||
+    !value.touchPicker?.commandRegistered || !value.touchPicker.commandHasIcon ||
+    !value.touchPicker.ribbonVisible || !value.touchPicker.executed ||
+    !value.touchPicker.pickerVisible || value.touchPicker.choiceCount !== 6 ||
+    !value.touchPicker.inserted || value.touchPicker.parsedKind !== "basic" ||
+    value.touchPicker.parsedBack !== "Mobile answer") {
   throw new Error(`Unexpected Obsidian smoke-test result: ${JSON.stringify(value)}`);
 }
 if (value.markerDecorations < 5 || value.fieldDecorations < 8) {

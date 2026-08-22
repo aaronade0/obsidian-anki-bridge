@@ -1,34 +1,25 @@
 import type { Extension } from "@codemirror/state";
 import { Prec, RangeSetBuilder } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView, keymap, ViewPlugin, type ViewUpdate } from "@codemirror/view";
-import { FuzzySuggestModal, type App } from "obsidian";
 import {
-  BASIC_MARKER,
-  CLOZE_CLOSE_MARKER,
-  CLOZE_OPEN_MARKER,
-  DUMP_END_MARKER,
-  DUMP_START_MARKER,
-  FlashcardParser,
-  IMAGE_MARKER,
-  LIST_END_MARKER,
-  LIST_START_MARKER,
-  REVERSE_MARKER
-} from "./parser";
+  FuzzySuggestModal,
+  setIcon,
+  type App,
+  type Editor,
+  type FuzzyMatch
+} from "obsidian";
+import {
+  CARD_TEMPLATE_CHOICES,
+  cardTemplateChoice,
+  insertCardTemplate,
+  resolveCardTemplate,
+  type CardTemplateChoice
+} from "./card-templates";
+import { FlashcardParser } from "./parser";
 
-interface TemplateChoice {
-  name: string;
-  replacement: string;
-  cursorBack: number;
+export function openCardTypeModal(app: App, editor: Editor): void {
+  new CardTypeModal(app, (choice) => insertCardTemplate(editor, choice)).open();
 }
-
-const choices: TemplateChoice[] = [
-  { name: "Basic card (one direction)", replacement: BASIC_MARKER, cursorBack: 0 },
-  { name: "Reversible card", replacement: REVERSE_MARKER, cursorBack: 0 },
-  { name: "List Card", replacement: `${LIST_START_MARKER}\n- \n${LIST_END_MARKER}`, cursorBack: LIST_END_MARKER.length + 1 },
-  { name: "Dump Card", replacement: `${DUMP_START_MARKER}\n\n${DUMP_END_MARKER}`, cursorBack: DUMP_END_MARKER.length + 1 },
-  { name: "Image card", replacement: IMAGE_MARKER, cursorBack: 0 },
-  { name: "Cloze deletion", replacement: `${CLOZE_OPEN_MARKER}${CLOZE_CLOSE_MARKER}`, cursorBack: CLOZE_CLOSE_MARKER.length }
-];
 
 export function createEditorExtensions(app: App, parser: FlashcardParser): Extension[] {
   const decorations = ViewPlugin.fromClass(
@@ -58,7 +49,7 @@ export function createEditorExtensions(app: App, parser: FlashcardParser): Exten
         }
         const head = selection.head;
         if (head >= 2 && view.state.doc.sliceString(head - 2, head) === ">>") {
-          const inserted = BASIC_MARKER;
+          const inserted = resolveCardTemplate(cardTemplateChoice("basic"), "").replacement;
           view.dispatch({
             changes: { from: head - 2, to: head, insert: inserted },
             selection: { anchor: head - 2 + inserted.length }
@@ -71,9 +62,10 @@ export function createEditorExtensions(app: App, parser: FlashcardParser): Exten
             const from = currentHead > 0 && view.state.doc.sliceString(currentHead - 1, currentHead) === ">"
               ? currentHead - 1
               : currentHead;
-            const finalHead = from + choice.replacement.length - choice.cursorBack;
+            const resolved = resolveCardTemplate(choice, "");
+            const finalHead = from + resolved.replacement.length - resolved.cursorBack;
             view.dispatch({
-              changes: { from, to: currentHead, insert: choice.replacement },
+              changes: { from, to: currentHead, insert: resolved.replacement },
               selection: { anchor: finalHead },
               scrollIntoView: true
             });
@@ -89,24 +81,34 @@ export function createEditorExtensions(app: App, parser: FlashcardParser): Exten
   return [decorations, Prec.highest(templateKeymap)];
 }
 
-class CardTypeModal extends FuzzySuggestModal<TemplateChoice> {
+class CardTypeModal extends FuzzySuggestModal<CardTemplateChoice> {
   constructor(
     app: App,
-    private readonly onChoose: (choice: TemplateChoice) => void
+    private readonly onChoose: (choice: CardTemplateChoice) => void
   ) {
     super(app);
     this.setPlaceholder("Choose a card format …");
+    this.modalEl.addClass("oab-card-picker");
   }
 
-  getItems(): TemplateChoice[] {
-    return choices;
+  getItems(): CardTemplateChoice[] {
+    return [...CARD_TEMPLATE_CHOICES];
   }
 
-  getItemText(item: TemplateChoice): string {
+  getItemText(item: CardTemplateChoice): string {
     return item.name;
   }
 
-  onChooseItem(item: TemplateChoice): void {
+  renderSuggestion(match: FuzzyMatch<CardTemplateChoice>, element: HTMLElement): void {
+    const row = element.createDiv({ cls: "oab-card-picker-row" });
+    const icon = row.createSpan({ cls: "oab-card-picker-icon" });
+    setIcon(icon, match.item.icon);
+    const text = row.createDiv({ cls: "oab-card-picker-text" });
+    text.createDiv({ cls: "oab-card-picker-name", text: match.item.name });
+    text.createDiv({ cls: "oab-card-picker-description", text: match.item.description });
+  }
+
+  onChooseItem(item: CardTemplateChoice): void {
     this.onChoose(item);
   }
 }

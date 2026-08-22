@@ -33,17 +33,33 @@ not download only `main.js`; use the complete ZIP archive.
 
 ## Quick start
 
-1. Install AnkiConnect and start Anki.
-2. In Obsidian, type the front of a card followed by `>>`.
-3. Press `Tab`. The bridge replaces `>>` with its collision-resistant card
-   marker.
-4. Type the answer immediately. No leading space is inserted.
-5. On desktop, wait for automatic synchronization or run **Sync current note
-   with Anki**. On mobile, the same action safely queues the note for the next
-   desktop synchronization.
+On desktop:
 
-Type a single `>` and press `Tab` to choose from all available card formats.
-The same templates are available through the command palette.
+1. Install AnkiConnect and start Anki.
+2. Type the front of a card followed by `>>`, then press `Tab`.
+3. The bridge replaces `>>` with its collision-resistant card marker. Type the
+   answer immediately; no leading space is inserted.
+
+On a phone or tablet:
+
+1. Place the cursor where the card should be inserted, or select existing text
+   that should become the front or a cloze deletion.
+2. Tap the plus-in-a-circle **Insert Anki flashcard** ribbon icon.
+3. Tap Basic, Reversible, List, Dump, Image Occlusion, or Cloze and enter the
+   remaining content at the cursor position selected by the plugin.
+
+The same touch-friendly picker is available by long-pressing in the editor and
+choosing **Insert Anki flashcard …**. For one-tap access above the mobile
+keyboard, add **Obsidian Anki Bridge: Insert flashcard …** to Obsidian's
+configurable mobile editor toolbar.
+
+On desktop, wait for automatic synchronization or run **Sync current note with
+Anki**. On mobile, that action safely queues the note for the next desktop
+synchronization.
+
+Desktop users can also type a single `>` and press `Tab` to open the same card
+picker. Every template remains available individually through the command
+palette.
 
 The complete guide can also be opened inside Obsidian in three ways:
 
@@ -57,7 +73,8 @@ The mobile plugin does not attempt to contact `127.0.0.1:8765`, because Anki
 desktop and AnkiConnect do not run on a phone. Instead it records small,
 device-specific operations in its `mobile-outbox` directory:
 
-1. Create, edit, rename, or remove cards normally in Obsidian Mobile.
+1. Create cards with the **Insert Anki flashcard** picker, then edit, rename, or
+   remove them normally in Obsidian Mobile.
 2. Let the same complete vault synchronize to the computer through Obsidian
    Sync, Nextcloud, Syncthing, or another file synchronization tool.
 3. Open desktop Obsidian and Anki. The bridge processes queued operations
@@ -93,7 +110,9 @@ Creates one front-to-back card:
 Question ⇢%%oab:basic:v1%%Answer
 ```
 
-The convenient input sequence is `Question >>`, `Tab`, then `Answer`.
+The convenient desktop input sequence is `Question >>`, `Tab`, then `Answer`.
+On mobile, type or select `Question`, open **Insert Anki flashcard**, and choose
+**Basic card**.
 
 ### Reversible card
 
@@ -103,7 +122,8 @@ Creates both front-to-back and back-to-front cards:
 Term ⇄%%oab:reverse:v1%%Definition
 ```
 
-Select **Reversible card** after typing `>` and pressing `Tab`.
+Choose **Reversible card** in the card picker. Desktop users can also open the
+picker by typing `>` and pressing `Tab`.
 
 ### Cloze card
 

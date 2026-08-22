@@ -78,3 +78,39 @@
   max-height: 75vh;
   overflow: auto;
 }
+
+.oab-card-picker .suggestion-item {
+  padding: 0.65rem 0.75rem;
+}
+
+.oab-card-picker-row {
+  display: grid;
+  grid-template-columns: 2rem minmax(0, 1fr);
+  align-items: center;
+  gap: 0.65rem;
+  min-height: 2.75rem;
+}
+
+.oab-card-picker-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--interactive-accent);
+}
+
+.oab-card-picker-icon svg {
+  width: 1.35rem;
+  height: 1.35rem;
+}
+
+.oab-card-picker-name {
+  color: var(--text-normal);
+  font-weight: 600;
+}
+
+.oab-card-picker-description {
+  margin-top: 0.12rem;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  white-space: normal;
+}
