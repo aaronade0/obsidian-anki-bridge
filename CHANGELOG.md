@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.4.3 - Reliable external file-sync catch-up
+
+- Read queued mobile changes directly from disk so a stale Obsidian read cache
+  cannot hide newly synchronized card text.
+- Rechecked registered notes every 30 seconds and the complete vault every five
+  minutes, covering sync clients that replace files without emitting Obsidian
+  modify events or a mobile outbox entry.
+- Moved the registry and mobile queue into the vault-global
+  `.obsidian-anki-bridge` directory, with automatic legacy migration, so mobile
+  and desktop can use separate Obsidian configuration folders safely.
+- Made desktop the sole writer of the shared card registry, preventing a stale
+  mobile plugin snapshot from rolling back card identities or sync state.
+- Kept the scan serialized and reused the normal reconciliation path so card
+  identity, scheduling, deletion quarantine, and media ownership stay intact.
+
 ## 0.4.2 - Automatic mobile card picker
 
 - Opened the card-format picker immediately after the second `>` is typed on

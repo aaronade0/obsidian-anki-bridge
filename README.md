@@ -70,7 +70,8 @@ The complete guide can also be opened inside Obsidian in three ways:
 
 The mobile plugin does not attempt to contact `127.0.0.1:8765`, because Anki
 desktop and AnkiConnect do not run on a phone. Instead it records small,
-device-specific operations in its `mobile-outbox` directory:
+device-specific operations in `.obsidian-anki-bridge/mobile-outbox` at the
+vault root:
 
 1. Create cards by typing `>>` and choosing a format, then edit, rename, or
    remove them normally in Obsidian Mobile.
@@ -85,12 +86,23 @@ The status bar shows how many operations are queued. Repeated edits to the same
 note on one device are coalesced. Events from different devices use separate
 files, preventing them from overwriting one another during file synchronization.
 Successfully applied events are removed automatically; failed events remain and
-are retried every 30 seconds while desktop Obsidian is open.
+are retried every 30 seconds while desktop Obsidian is open. Desktop Obsidian
+also checks registered note files directly every 30 seconds and scans the full
+vault every five minutes, so external sync changes are recovered even when a
+mobile event was not written.
 
 Rich media and plugin-rendered visuals are rendered only on the desktop. A
 phone that does not have Excalidraw, Function Plot, Charts View, or another
 renderer installed therefore cannot replace a working Anki visual with a blank
 or fallback image.
+
+When a file-sync service synchronizes the complete vault, use a separate
+Obsidian configuration folder on each device (for example `.obsidian` on
+desktop and `.obsidian-mobile` on the phone). The bridge registry and queue are
+vault-global, so this prevents device-specific Obsidian settings from
+overwriting one another without breaking mobile card synchronization. Desktop
+Obsidian is the sole writer of the shared card registry; mobile devices can only
+append validated operations to the queue.
 
 Removing a card inside a note is reconciled on the desktop and enters the usual
 confirmed-deletion flow. Deleting or renaming a whole note through Obsidian

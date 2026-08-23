@@ -78,7 +78,12 @@ by accident or collide with another flashcard syntax.
 
 ## Stable identity without IDs in Markdown
 
-`data.json` stores random file/card/item keys. Reconciliation uses:
+The vault-global `.obsidian-anki-bridge/data.json` stores random
+file/card/item keys. Desktop Obsidian is the only writer of this authoritative
+registry; mobile devices submit operations through the outbox and cannot
+replace it with a stale synchronized snapshot. A device-local compatibility
+copy remains in each plugin folder for settings, safe downgrade, and recovery.
+Reconciliation uses:
 
 1. exact normalized-content fingerprints;
 2. card type plus nearest relative position for edits inside one known file;
@@ -127,8 +132,9 @@ arrive through filesystem or sync tools without an Obsidian rename event.
 
 Obsidian Mobile cannot use desktop AnkiConnect, and the official Anki sync
 protocol is not a general card CRUD API. Mobile devices therefore do not render
-or reconcile Anki notes. They write small schema-validated events into
-`mobile-outbox` below the synchronized plugin directory.
+or reconcile Anki notes. They write small schema-validated events into the
+vault-global `.obsidian-anki-bridge/mobile-outbox` directory. Desktop also
+drains the former plugin-local outbox during migration.
 
 Every device has a locally stored random device ID. Repeated changes from one
 device are coalesced, while events from separate devices use separate files so
@@ -137,9 +143,12 @@ only to source paths or already-confirmed deletion IDs; card content remains in
 the Markdown source and media remains in the vault.
 
 Desktop Obsidian processes the queue at startup and every 30 seconds. It also
-scans for changed registered notes at startup, covering edits that arrived
-while the desktop application was closed. An event is removed only after the
-local Anki operation succeeds. Connection failures leave it queued for retry.
+reads registered notes directly from disk every 30 seconds and performs a
+complete vault scan every five minutes. This covers edits that arrived while
+the desktop application was closed, file-sync clients that replace files
+without emitting an Obsidian modify event, and changes made while the mobile
+plugin was disabled. An event is removed only after the local Anki operation
+succeeds. Connection failures leave it queued for retry.
 
 An explicit mobile whole-note deletion is represented by a tombstone event.
 This lets the desktop distinguish it from an unobserved filesystem disappearance

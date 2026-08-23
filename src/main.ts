@@ -36,6 +36,7 @@ import {
   type StoredMobileOutboxEvent
 } from "./mobile-outbox";
 import { BridgeSettingTab } from "./settings";
+import { hydratePluginData, writesSharedRegistry } from "./state";
 import type {
   DesiredAnkiNote,
   PluginData,
@@ -61,6 +62,10 @@ const DEFAULT_SETTINGS: PluginSettings = {
 
 const DEVICE_ID_STORAGE_KEY = "obsidian-anki-bridge-device-id";
 const MOBILE_OUTBOX_POLL_INTERVAL_MS = 30_000;
+const EXTERNAL_FULL_SCAN_INTERVAL_MS = 5 * 60_000;
+const SHARED_STATE_DIRECTORY = ".obsidian-anki-bridge";
+const SHARED_DATA_PATH = `${SHARED_STATE_DIRECTORY}/data.json`;
+const SHARED_MOBILE_OUTBOX_DIRECTORY = `${SHARED_STATE_DIRECTORY}/mobile-outbox`;
 
 export default class ObsidianAnkiBridge extends Plugin {
   data: PluginData = emptyData();
@@ -74,8 +79,11 @@ export default class ObsidianAnkiBridge extends Plugin {
   private lastFailureNoticeAt = 0;
   private visualRenderer!: ObsidianVisualRenderer;
   private mobileOutbox!: MobileOutbox;
+  private mobileOutboxes: MobileOutbox[] = [];
   private queuedMobileActions = 0;
   private processingMobileOutbox?: Promise<void>;
+  private scanningExternalChanges?: Promise<void>;
+  private lastExternalFullScanAt = 0;
 
   get bridgeSettings(): PluginSettings {
     return this.data.settings;
@@ -97,9 +105,14 @@ export default class ObsidianAnkiBridge extends Plugin {
     const pluginDirectory = this.manifest.dir ?? ".obsidian/plugins/obsidian-anki-bridge";
     this.mobileOutbox = new MobileOutbox(
       this.app.vault.adapter,
-      `${pluginDirectory}/mobile-outbox`,
+      SHARED_MOBILE_OUTBOX_DIRECTORY,
       deviceId
     );
+    this.mobileOutboxes = [this.mobileOutbox];
+    const legacyOutboxDirectory = `${pluginDirectory}/mobile-outbox`;
+    if (legacyOutboxDirectory !== SHARED_MOBILE_OUTBOX_DIRECTORY) {
+      this.mobileOutboxes.push(new MobileOutbox(this.app.vault.adapter, legacyOutboxDirectory, deviceId));
+    }
     await this.refreshMobileOutboxCount();
     this.visualRenderer = new ObsidianVisualRenderer(
       this.app,
@@ -188,7 +201,10 @@ export default class ObsidianAnkiBridge extends Plugin {
         Math.max(5, this.bridgeSettings.pathAuditIntervalMinutes) * 60_000
       ));
       this.registerInterval(window.setInterval(
-        () => void this.processMobileOutbox(),
+        () => {
+          void this.processMobileOutbox();
+          void this.scanExternalChanges();
+        },
         MOBILE_OUTBOX_POLL_INTERVAL_MS
       ));
     }
@@ -207,26 +223,44 @@ export default class ObsidianAnkiBridge extends Plugin {
   }
 
   async loadPluginData(): Promise<void> {
-    const raw = (await this.loadData()) as Partial<PluginData> | null;
-    this.data = {
-      schemaVersion: 1,
-      settings: { ...DEFAULT_SETTINGS, ...(raw?.settings ?? {}) },
-      files: Array.isArray(raw?.files) ? raw.files : [],
-      cards: Array.isArray(raw?.cards) ? raw.cards : [],
-      conflicts: Array.isArray(raw?.conflicts) ? raw.conflicts : [],
-      lastSuccessfulSyncAt: raw?.lastSuccessfulSyncAt
-    };
+    const local = (await this.loadData()) as Partial<PluginData> | null;
+    let shared: Partial<PluginData> | null = null;
+    const sharedDataExists = await this.app.vault.adapter.exists(SHARED_DATA_PATH);
+    if (sharedDataExists) {
+      shared = JSON.parse(await this.app.vault.adapter.read(SHARED_DATA_PATH)) as Partial<PluginData>;
+    }
+    // Settings are device-local once separate Obsidian config folders are in
+    // use. A fresh device inherits the shared settings once, then keeps its own
+    // connection and UI preferences without rewriting the desktop registry.
+    this.data = hydratePluginData(DEFAULT_SETTINGS, local, shared);
     for (const card of this.data.cards) {
       card.children ??= [];
       for (const child of card.children) {
         child.status ??= "active";
       }
     }
+    if (!sharedDataExists && writesSharedRegistry(Platform.isMobile)) {
+      await this.writeSharedData();
+    }
   }
 
   async savePluginData(): Promise<void> {
+    // Only desktop reconciles Anki and owns the authoritative shared registry.
+    // Mobile writes operations to the outbox and must never replace that
+    // registry with an older synchronized snapshot.
+    if (writesSharedRegistry(Platform.isMobile)) {
+      await this.writeSharedData();
+    }
+    // Keep a device-local copy for settings, safe downgrade, and recovery.
     await this.saveData(this.data);
     this.updateStatus();
+  }
+
+  private async writeSharedData(): Promise<void> {
+    if (!(await this.app.vault.adapter.exists(SHARED_STATE_DIRECTORY))) {
+      await this.app.vault.adapter.mkdir(SHARED_STATE_DIRECTORY);
+    }
+    await this.app.vault.adapter.write(SHARED_DATA_PATH, `${JSON.stringify(this.data, null, 2)}\n`);
   }
 
   async testConnection(): Promise<void> {
@@ -488,29 +522,53 @@ export default class ObsidianAnkiBridge extends Plugin {
   }
 
   private async refreshMobileOutboxCount(): Promise<void> {
-    const snapshot = await this.mobileOutbox.snapshot();
-    this.queuedMobileActions = snapshot.events.length;
+    const snapshots = await Promise.all(this.mobileOutboxes.map((outbox) => outbox.snapshot()));
+    this.queuedMobileActions = new Set(
+      snapshots.flatMap((snapshot) => snapshot.events.map(({ event }) => event.id))
+    ).size;
     this.updateStatus();
   }
 
   private async runDesktopCatchUp(): Promise<void> {
     await this.processMobileOutbox();
-    await this.syncFilesChangedWhileClosed();
+    await this.scanExternalChanges(true);
     await this.auditMovedFiles();
   }
 
-  private async syncFilesChangedWhileClosed(): Promise<void> {
+  async scanExternalChanges(forceFullScan = false): Promise<void> {
+    if (this.scanningExternalChanges) {
+      return this.scanningExternalChanges;
+    }
+    const run = this.scanExternalChangesNow(forceFullScan).finally(() => {
+      this.scanningExternalChanges = undefined;
+    });
+    this.scanningExternalChanges = run;
+    return run;
+  }
+
+  private async scanExternalChangesNow(forceFullScan: boolean): Promise<void> {
     if (!this.bridgeSettings.autoSync) {
       return;
     }
-    for (const file of this.app.vault.getMarkdownFiles()) {
-      const source = await this.app.vault.cachedRead(file);
+    const now = Date.now();
+    const fullScan = forceFullScan || now - this.lastExternalFullScanAt >= EXTERNAL_FULL_SCAN_INTERVAL_MS;
+    if (fullScan) {
+      this.lastExternalFullScanAt = now;
+    }
+    const registeredPaths = new Set(this.data.files.map((file) => file.path));
+    const files = fullScan
+      ? this.app.vault.getMarkdownFiles()
+      : this.app.vault.getMarkdownFiles().filter((file) => registeredPaths.has(file.path));
+    for (const file of files) {
+      // File-sync clients can replace a note without emitting an Obsidian
+      // modify event. `read` deliberately bypasses the cachedRead layer.
+      const source = await this.app.vault.read(file);
       const registered = this.data.files.find((candidate) => candidate.path === file.path);
       const needsSync = registered
         ? registered.contentHash !== stableHash(source)
         : containsCanonicalMarker(source);
       if (needsSync) {
-        await this.syncFileGuarded(file, false);
+        await this.syncFileGuarded(file, false, source);
         await yieldToUi();
       }
     }
@@ -538,12 +596,37 @@ export default class ObsidianAnkiBridge extends Plugin {
   }
 
   private async processMobileOutboxNow(): Promise<void> {
-    const snapshot = await this.mobileOutbox.snapshot();
+    const snapshots = await Promise.all(this.mobileOutboxes.map(async (outbox) => ({
+      outbox,
+      snapshot: await outbox.snapshot()
+    })));
+    const queued: Array<{
+      outbox: MobileOutbox;
+      stored: StoredMobileOutboxEvent;
+      copies: Array<{ outbox: MobileOutbox; stored: StoredMobileOutboxEvent }>;
+    }> = [];
+    const queuedById = new Map<string, (typeof queued)[number]>();
+    for (const { outbox, snapshot } of snapshots) {
+      for (const stored of snapshot.events) {
+        const existing = queuedById.get(stored.event.id);
+        if (existing) {
+          existing.copies.push({ outbox, stored });
+        } else {
+          const candidate = { outbox, stored, copies: [] };
+          queuedById.set(stored.event.id, candidate);
+          queued.push(candidate);
+        }
+      }
+    }
+    queued.sort((left, right) => {
+      const time = left.stored.event.createdAt - right.stored.event.createdAt;
+      return time !== 0 ? time : left.stored.event.id.localeCompare(right.stored.event.id);
+    });
     const hadUnavailableConflict = this.data.conflicts.some((conflict) =>
       conflict.code === "MOBILE_OUTBOX_UNAVAILABLE" && conflict.resolvedAt === undefined
     );
     this.resolveConflict("MOBILE_OUTBOX_UNAVAILABLE");
-    const invalidPaths = new Set(snapshot.invalidFiles);
+    const invalidPaths = new Set(snapshots.flatMap(({ snapshot }) => snapshot.invalidFiles));
     let invalidConflictChanged = false;
     for (const conflict of this.data.conflicts) {
       if (conflict.code === "MOBILE_OUTBOX_INVALID" && conflict.resolvedAt === undefined &&
@@ -552,7 +635,7 @@ export default class ObsidianAnkiBridge extends Plugin {
         invalidConflictChanged = true;
       }
     }
-    for (const invalidPath of snapshot.invalidFiles) {
+    for (const invalidPath of invalidPaths) {
       this.recordConflict(
         "MOBILE_OUTBOX_INVALID",
         "A mobile outbox entry is invalid and was preserved for diagnosis instead of being executed.",
@@ -564,13 +647,17 @@ export default class ObsidianAnkiBridge extends Plugin {
       await this.savePluginData();
     }
 
-    for (const [index, stored] of snapshot.events.entries()) {
+    for (const [index, { outbox, stored, copies }] of queued.entries()) {
       try {
-        const handled = await this.processMobileOutboxEvent(stored, snapshot.events.slice(index + 1));
+        const handled = await this.processMobileOutboxEvent(
+          stored,
+          queued.slice(index + 1).map((candidate) => candidate.stored)
+        );
         if (!handled) {
           continue;
         }
-        await this.mobileOutbox.remove(stored.storagePath);
+        await outbox.remove(stored.storagePath);
+        await Promise.all(copies.map((copy) => copy.outbox.remove(copy.stored.storagePath)));
         const hadProcessingConflict = this.data.conflicts.some((conflict) =>
           conflict.code === "MOBILE_OUTBOX_FAILED" &&
           conflict.path === stored.storagePath &&
@@ -605,7 +692,8 @@ export default class ObsidianAnkiBridge extends Plugin {
           later.type === "rename" && later.oldPath === event.path
         );
       }
-      return (await this.syncFileGuarded(file, false)) !== undefined;
+      const source = await this.app.vault.read(file);
+      return (await this.syncFileGuarded(file, false, source)) !== undefined;
     }
 
     if (event.type === "rename") {
@@ -631,7 +719,8 @@ export default class ObsidianAnkiBridge extends Plugin {
         this.resolveConflict("FILE_MOVE_AMBIGUOUS", event.oldPath);
         await this.savePluginData();
       }
-      return (await this.syncFileGuarded(file, false)) !== undefined;
+      const source = await this.app.vault.read(file);
+      return (await this.syncFileGuarded(file, false, source)) !== undefined;
     }
 
     if (event.type === "delete") {
@@ -702,7 +791,11 @@ export default class ObsidianAnkiBridge extends Plugin {
     new Notice(`Obsidian Anki Bridge: ${synced} notes synchronized, ${failed} failed.`, 10_000);
   }
 
-  private async syncFileGuarded(file: TFile, manual: boolean): Promise<SyncSummary | undefined> {
+  private async syncFileGuarded(
+    file: TFile,
+    manual: boolean,
+    sourceOverride?: string
+  ): Promise<SyncSummary | undefined> {
     if (Platform.isMobile) {
       await this.queueMobileUpsert(file, manual);
       return emptySummary(file.path);
@@ -711,7 +804,7 @@ export default class ObsidianAnkiBridge extends Plugin {
     if (current) {
       return current;
     }
-    const run = this.syncFile(file, manual).catch(async (error: unknown) => {
+    const run = this.syncFile(file, manual, sourceOverride).catch(async (error: unknown) => {
       const message = errorMessage(error);
       this.recordConflict("SYNC_FAILED", message, file.path);
       await this.savePluginData();
@@ -726,8 +819,8 @@ export default class ObsidianAnkiBridge extends Plugin {
     return run;
   }
 
-  private async syncFile(file: TFile, manual: boolean): Promise<SyncSummary> {
-    const source = await this.app.vault.cachedRead(file);
+  private async syncFile(file: TFile, manual: boolean, sourceOverride?: string): Promise<SyncSummary> {
+    const source = sourceOverride ?? await this.app.vault.cachedRead(file);
     if (!containsCanonicalMarker(source) && !this.data.files.some((candidate) => candidate.path === file.path)) {
       if (manual) {
         new Notice("No new Obsidian Anki cards were found in this note.");

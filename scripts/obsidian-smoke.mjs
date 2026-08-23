@@ -428,18 +428,29 @@ const result = await command("Runtime.evaluate", {
     const mobileOutboxPath = "Temporary Mobile Outbox " + Date.now() + ".md";
     const mobileOutboxSource = "Queued on mobile ⇢%%oab:basic:v1%%First desktop answer";
     const mobileOutboxFile = await globalThis.app.vault.create(mobileOutboxPath, mobileOutboxSource);
-    await plugin.mobileOutbox.enqueue({ type: "upsert", path: mobileOutboxPath });
+    const sharedStateAvailable = await globalThis.app.vault.adapter.exists(".obsidian-anki-bridge/data.json");
+    const firstMobileEvent = await plugin.mobileOutbox.enqueue({ type: "upsert", path: mobileOutboxPath });
+    const sharedOutboxUsed = firstMobileEvent.storagePath.startsWith(".obsidian-anki-bridge/mobile-outbox/");
     await plugin.processMobileOutbox();
     const mobileOutboxCard = plugin.data.cards.find((card) => card.sourcePath === mobileOutboxPath);
     if (!mobileOutboxCard?.ankiNoteId) throw new Error("Mobile outbox did not create its Anki note.");
     const mobileCreatedNote = await plugin.client().noteInfo(mobileOutboxCard.ankiNoteId);
     const mobileOutboxCreated = mobileCreatedNote?.fields?.Back?.value?.includes("First desktop answer") === true;
     const editedMobileOutboxSource = "Queued on mobile ⇢%%oab:basic:v1%%Edited on the phone";
-    await globalThis.app.vault.modify(mobileOutboxFile, editedMobileOutboxSource);
+    await globalThis.app.vault.adapter.write(mobileOutboxPath, editedMobileOutboxSource);
     await plugin.mobileOutbox.enqueue({ type: "upsert", path: mobileOutboxPath });
     await plugin.processMobileOutbox();
     const mobileUpdatedNote = await plugin.client().noteInfo(mobileOutboxCard.ankiNoteId);
     const mobileOutboxUpdated = mobileUpdatedNote?.fields?.Back?.value?.includes("Edited on the phone") === true;
+    await globalThis.app.vault.adapter.write(
+      mobileOutboxPath,
+      "Queued on mobile ⇢%%oab:basic:v1%%Migrated legacy event"
+    );
+    await plugin.mobileOutboxes[1].enqueue({ type: "upsert", path: mobileOutboxPath });
+    await plugin.processMobileOutbox();
+    const legacyUpdatedNote = await plugin.client().noteInfo(mobileOutboxCard.ankiNoteId);
+    const legacyOutboxMigrated = legacyUpdatedNote?.fields?.Back?.value?.includes("Migrated legacy event") === true &&
+      (await plugin.mobileOutboxes[1].snapshot()).events.length === 0;
 
     await globalThis.app.vault.delete(mobileOutboxFile);
     for (let attempt = 0; attempt < 50; attempt += 1) {
@@ -465,6 +476,30 @@ const result = await command("Runtime.evaluate", {
       !plugin.data.cards.some((card) => card.key === mobileOutboxCard.key) &&
       !plugin.data.files.some((entry) => entry.path === mobileOutboxPath);
     const mobileOutboxDrained = (await plugin.mobileOutbox.snapshot()).events.length === 0;
+
+    const externalScanPath = "Temporary External Scan " + Date.now() + ".md";
+    const externalScanFile = await globalThis.app.vault.create(
+      externalScanPath,
+      "External scan ⇢%%oab:basic:v1%%Initial answer"
+    );
+    await plugin.syncFileGuarded(externalScanFile, false);
+    const externalScanCard = plugin.data.cards.find((card) => card.sourcePath === externalScanPath);
+    if (!externalScanCard?.ankiNoteId) throw new Error("External scan setup did not create its Anki note.");
+    await globalThis.app.vault.adapter.write(
+      externalScanPath,
+      "External scan ⇢%%oab:basic:v1%%Changed outside Obsidian"
+    );
+    plugin.bridgeSettings.autoSync = true;
+    await plugin.scanExternalChanges(false);
+    plugin.bridgeSettings.autoSync = false;
+    const externalScanNote = await plugin.client().noteInfo(externalScanCard.ankiNoteId);
+    const externalFileScanRecovered = externalScanNote?.fields?.Back?.value?.includes("Changed outside Obsidian") === true;
+    await plugin.client().deleteNotes([externalScanCard.ankiNoteId]);
+    plugin.data.cards = plugin.data.cards.filter((card) => card.sourcePath !== externalScanPath);
+    plugin.data.files = plugin.data.files.filter((entry) => entry.path !== externalScanPath);
+    plugin.data.conflicts = plugin.data.conflicts.filter((conflict) => conflict.path !== externalScanPath);
+    await plugin.savePluginData();
+    await globalThis.app.vault.delete(externalScanFile);
 
     return {
       pluginLoaded: true,
@@ -516,9 +551,13 @@ const result = await command("Runtime.evaluate", {
       ambiguousRestoreRecovered,
       mobileOutboxCreated,
       mobileOutboxUpdated,
+      sharedStateAvailable,
+      sharedOutboxUsed,
+      legacyOutboxMigrated,
       mobileDeleteQuarantined,
       mobileConfirmedDeletionApplied,
       mobileOutboxDrained,
+      externalFileScanRecovered,
       markerDecorations: document.querySelectorAll(".oab-card-marker").length,
       fieldDecorations: document.querySelectorAll(".oab-card-field").length,
       unresolvedConflicts: plugin.data.conflicts.filter((conflict) => conflict.resolvedAt === undefined)
@@ -649,8 +688,10 @@ if (!value?.pluginLoaded || value.summary?.desiredNotes !== 7 || value.noteIds?.
     value.directDeletedNotes !== 2 || !value.directAnkiNotesDeleted || !value.directRegistryCleared ||
     !value.ambiguousConflictOnly || !value.ambiguousAnkiNoteRetained ||
     !value.ambiguousHasNoDeleteButton || !value.ambiguousRestoreRecovered ||
-    !value.mobileOutboxCreated || !value.mobileOutboxUpdated || !value.mobileDeleteQuarantined ||
+    !value.mobileOutboxCreated || !value.mobileOutboxUpdated || !value.sharedStateAvailable ||
+    !value.sharedOutboxUsed || !value.legacyOutboxMigrated || !value.mobileDeleteQuarantined ||
     !value.mobileConfirmedDeletionApplied || !value.mobileOutboxDrained ||
+    !value.externalFileScanRecovered ||
     !value.shortcutExpansion || value.shortcutBack !== "Answer" ||
     !value.touchPicker?.commandRegistered || !value.touchPicker.commandHasIcon ||
     !value.touchPicker.ribbonVisible || !value.touchPicker.executed ||
