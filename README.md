@@ -12,9 +12,9 @@ are open. No server, mobile Anki API, or additional account is required.
 
 ## Installation
 
-The plugin is prepared for Obsidian's Community Plugins directory and awaiting
-its initial directory submission. Until the listing is approved, install the
-current GitHub release manually:
+The plugin has been submitted to Obsidian's Community Plugins directory. Until
+the listing becomes installable after review, install the current GitHub
+release manually:
 
 1. Download `anki-bridge-<version>.zip` from the
    [latest release](https://github.com/aaronade0/obsidian-anki-bridge/releases/latest).
@@ -29,8 +29,9 @@ current GitHub release manually:
    including `.obsidian/plugins/anki-bridge`. No mobile connection
    setup is needed.
 
-The release bundle includes the PDF.js worker required for PDF previews. Do
-not download only `main.js`; use the complete ZIP archive.
+The release bundle contains all required runtime files. The PDF.js worker is
+bundled into `main.js`, so Community Plugin installations can render PDF
+previews without an unsupported extra release asset.
 
 Versions before 1.0.0 used the plugin ID `obsidian-anki-bridge`. Install 1.0.0
 into the new `anki-bridge` folder and enable **Anki Bridge**. The plugin reads

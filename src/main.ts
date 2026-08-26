@@ -1,4 +1,5 @@
 import {
+  Component,
   MarkdownRenderer,
   MarkdownView,
   Modal,
@@ -123,10 +124,7 @@ export default class ObsidianAnkiBridge extends Plugin {
       this.mobileOutboxes.push(new MobileOutbox(this.app.vault.adapter, formerOutboxDirectory, deviceId));
     }
     await this.refreshMobileOutboxCount();
-    this.visualRenderer = new ObsidianVisualRenderer(
-      this.app,
-      this.manifest.dir ?? `.obsidian/plugins/${CURRENT_PLUGIN_ID}`
-    );
+    this.visualRenderer = new ObsidianVisualRenderer(this.app);
     this.statusEl = this.addStatusBarItem();
     this.statusEl.addClass("oab-status");
     this.statusEl.addEventListener("click", () => this.showConflictReport());
@@ -1884,14 +1882,25 @@ class MissingFileRelinkModal extends Modal {
 }
 
 class HelpModal extends Modal {
-  constructor(private readonly plugin: ObsidianAnkiBridge) {
+  private renderComponent?: Component;
+
+  constructor(plugin: ObsidianAnkiBridge) {
     super(plugin.app);
   }
 
   onOpen(): void {
     this.contentEl.empty();
     this.contentEl.addClass("oab-help");
-    void MarkdownRenderer.render(this.app, README_MARKDOWN, this.contentEl, "", this.plugin);
+    this.renderComponent?.unload();
+    const renderComponent = new Component();
+    renderComponent.load();
+    this.renderComponent = renderComponent;
+    void MarkdownRenderer.render(this.app, README_MARKDOWN, this.contentEl, "", renderComponent);
+  }
+
+  onClose(): void {
+    this.renderComponent?.unload();
+    this.renderComponent = undefined;
   }
 }
 

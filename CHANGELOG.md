@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.0.1 - Community directory review fixes
+
+- Replaced direct capture-element style assignments with Obsidian's
+  `setCssStyles` helper.
+- Scoped the help renderer to a short-lived component instead of the main
+  plugin lifecycle.
+- Bundled the PDF.js worker into `main.js` so Community Plugin installations
+  do not depend on unsupported extra release assets.
+- Added GitHub build-provenance attestations for the Community Plugin runtime
+  assets.
+
 ## 1.0.0 - Nested cards, durable card moves, and Community directory readiness
 
 - Added independently scheduled Basic, Reversible, Cloze, and Image Occlusion

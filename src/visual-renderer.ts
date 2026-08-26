@@ -1,6 +1,7 @@
 import { Component, MarkdownRenderer, type App } from "obsidian";
 import { toPng } from "html-to-image";
-import { GlobalWorkerOptions, getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
+import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
+import "pdfjs-dist/legacy/build/pdf.worker.mjs";
 
 export interface RenderedVisual {
   data: string;
@@ -17,25 +18,21 @@ const CAPTURE_WIDTH = 760;
 const CAPTURE_TIMEOUT_MS = 4_000;
 
 export class ObsidianVisualRenderer implements VisualRenderer {
-  constructor(
-    private readonly app: App,
-    pluginDirectory: string
-  ) {
-    const workerPath = `${pluginDirectory}/pdf.worker.min.mjs`;
-    GlobalWorkerOptions.workerSrc = this.app.vault.adapter.getResourcePath(workerPath);
-  }
+  constructor(private readonly app: App) {}
 
   async renderMarkdown(markdown: string, sourcePath: string): Promise<RenderedVisual | undefined> {
     const component = new Component();
     const container = document.body.createDiv({ cls: "markdown-rendered oab-visual-capture" });
-    container.style.width = `${CAPTURE_WIDTH}px`;
-    container.style.position = "fixed";
-    container.style.left = "-10000px";
-    container.style.top = "0";
-    container.style.padding = "24px";
-    container.style.background = "#ffffff";
-    container.style.color = "#202020";
-    container.style.zIndex = "-1";
+    container.setCssStyles({
+      width: `${CAPTURE_WIDTH}px`,
+      position: "fixed",
+      left: "-10000px",
+      top: "0",
+      padding: "24px",
+      background: "#ffffff",
+      color: "#202020",
+      zIndex: "-1"
+    });
     component.load();
     try {
       await MarkdownRenderer.render(this.app, markdown, container, sourcePath, component);

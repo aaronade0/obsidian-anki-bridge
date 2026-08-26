@@ -35,8 +35,4 @@ await mkdir(destination, { recursive: true });
 for (const filename of ["main.js", "manifest.json", "styles.css", "README.md"]) {
   await copyFile(join(projectRoot, filename), join(destination, filename));
 }
-await copyFile(
-  join(projectRoot, "node_modules", "pdfjs-dist", "legacy", "build", "pdf.worker.min.mjs"),
-  join(destination, "pdf.worker.min.mjs")
-);
 process.stdout.write(`Deployed ${manifest.name} to ${destination}\n`);
