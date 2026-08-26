@@ -3,7 +3,7 @@ name: Release
 on:
   push:
     tags:
-      - "v*"
+      - "*.*.*"
 
 permissions:
   contents: write
@@ -22,9 +22,9 @@ jobs:
       - name: Assemble release bundle
         shell: bash
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="$GITHUB_REF_NAME"
           test "$(node -p "require('./manifest.json').version")" = "$VERSION"
-          BUNDLE="release/obsidian-anki-bridge"
+          BUNDLE="release/anki-bridge"
           mkdir -p "$BUNDLE/licenses"
           cp main.js manifest.json styles.css README.md LICENSE "$BUNDLE/"
           cp node_modules/pdfjs-dist/legacy/build/pdf.worker.min.mjs "$BUNDLE/"
@@ -32,16 +32,16 @@ jobs:
           cp node_modules/markdown-it/LICENSE "$BUNDLE/licenses/markdown-it-MIT.txt"
           cp node_modules/pdfjs-dist/LICENSE "$BUNDLE/licenses/pdfjs-dist-Apache-2.0.txt"
           cd release
-          zip -r "obsidian-anki-bridge-${VERSION}.zip" obsidian-anki-bridge
+          zip -r "anki-bridge-${VERSION}.zip" anki-bridge
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="$GITHUB_REF_NAME"
           gh release create "$GITHUB_REF_NAME" \
             main.js manifest.json styles.css \
             node_modules/pdfjs-dist/legacy/build/pdf.worker.min.mjs \
-            "release/obsidian-anki-bridge-${VERSION}.zip" \
-            --title "Obsidian Anki Bridge ${VERSION}" \
+            "release/anki-bridge-${VERSION}.zip" \
+            --title "Anki Bridge ${VERSION}" \
             --generate-notes \
             --verify-tag
