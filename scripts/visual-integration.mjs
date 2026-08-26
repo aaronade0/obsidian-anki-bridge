@@ -46,9 +46,9 @@ const result = await command("Runtime.evaluate", {
       }
     }
     await sleep(250);
-    await globalThis.app.plugins.disablePlugin("obsidian-anki-bridge");
-    await globalThis.app.plugins.enablePlugin("obsidian-anki-bridge");
-    const plugin = globalThis.app.plugins.plugins["obsidian-anki-bridge"];
+    await globalThis.app.plugins.disablePlugin("anki-bridge");
+    await globalThis.app.plugins.enablePlugin("anki-bridge");
+    const plugin = globalThis.app.plugins.plugins["anki-bridge"];
     if (!plugin) throw new Error("Bridge plugin was not reloaded.");
     const inputs = {
       excalidraw: "![[Visual Fixture.excalidraw]]",

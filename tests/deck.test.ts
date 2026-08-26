@@ -16,8 +16,17 @@ describe("deck derivation", () => {
     expect(sourceContext("Schule/Physik/Kinematik.md", ["Herleitung", "Schritt 1"])).toEqual({
       folderPath: "Schule/Physik",
       noteName: "Kinematik",
-      headingPath: ["Herleitung", "Schritt 1"]
+      headingPath: ["Herleitung", "Schritt 1"],
+      listContext: []
     });
+  });
+
+  it("retains the list ancestry alongside heading context", () => {
+    expect(sourceContext("Physics/Mechanics.md", ["Forces"], ["Newtonian mechanics", "Examples"]))
+      .toMatchObject({
+        headingPath: ["Forces"],
+        listContext: ["Newtonian mechanics", "Examples"]
+      });
   });
 
   it("does not repeat a top-level heading equal to the note name", () => {

@@ -15,6 +15,21 @@ describe("Anki source context", () => {
     expect(context).not.toContain("In Obsidian öffnen");
   });
 
+  it("renders indented list ancestors as context without interpreting HTML", () => {
+    const context = renderContext(
+      "School/Physics",
+      "Motion",
+      ["Mechanics"],
+      sourceHref("My Vault", "card_123"),
+      ["Forces & motion", "<unsafe>"]
+    );
+
+    expect(context).toContain('<span class="list-context" style="--depth:0">');
+    expect(context).toContain("Forces &amp; motion");
+    expect(context).toContain("&lt;unsafe&gt;");
+    expect(context).not.toContain("<unsafe>");
+  });
+
   it("creates an Obsidian file link for embedded visuals", () => {
     expect(fileHref("My Vault", "Drawings/Force diagram.excalidraw.md")).toBe(
       "obsidian://open?vault=My%20Vault&file=Drawings%2FForce%20diagram.excalidraw.md"

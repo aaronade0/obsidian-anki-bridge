@@ -1,5 +1,41 @@
 # Changelog
 
+## 1.0.0 - Nested cards, durable card moves, and Community directory readiness
+
+- Added independently scheduled Basic, Reversible, Cloze, and Image Occlusion
+  cards inside List items without exposing their answers on the outer List card.
+- Added list-ancestor context for cards nested below indented Markdown list
+  items, alongside the existing path, note, and heading context in Anki.
+- Made every visible card marker clickable so it opens the corresponding Anki
+  note; List markers open all of their active child notes. Removed the former
+  cursor-based command.
+- Preserved bridge keys, Anki note/card IDs, scheduling, and review history when
+  an unchanged uniquely identifiable card is cut between existing notes. A copy
+  still creates a new identity, and ambiguous moves are never guessed.
+- Serialized per-file synchronization so simultaneous source/target editor
+  events cannot race while a card is being moved.
+- Renamed the plugin ID from `obsidian-anki-bridge` to the Community-directory-
+  compatible `anki-bridge`, with migration of the old local settings/outbox and
+  continued use of the existing vault-global registry.
+- Added explicit network/data-access documentation, updated security guidance,
+  and release assets/tags compatible with the Community Plugins directory.
+
+## 0.4.4 - Explicit resolution for externally missing notes
+
+- Added **Delete all from Anki…** for a source note that disappeared through a
+  file sync client or file manager, with a second confirmation covering every
+  owned card from that note.
+- Rechecked the missing state and every Anki ownership mapping immediately
+  before deleting, then verified the complete batch before removing registry
+  state.
+- Added **Set new path…** for explicitly relinking a moved note to an existing
+  vault-relative Markdown path while preserving bridge IDs and Anki review
+  history.
+- Rejected missing, unsafe, or already-owned replacement paths instead of
+  guessing through ambiguous moves.
+- Allowed whole-file deletion confirmation from mobile through the validated
+  desktop outbox, retaining the same safety checks before Anki is changed.
+
 ## 0.4.3 - Reliable external file-sync catch-up
 
 - Read queued mobile changes directly from disk so a stale Obsidian read cache

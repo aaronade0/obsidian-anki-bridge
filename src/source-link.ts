@@ -1,9 +1,20 @@
-export function renderContext(folderPath: string, noteName: string, headings: string[], href: string): string {
+export function renderContext(
+  folderPath: string,
+  noteName: string,
+  headings: string[],
+  href: string,
+  listContext: string[] = []
+): string {
   const folder = folderPath ? `<span class="folder">${escapeHtml(folderPath)}</span> / ` : "";
   const headingHtml = headings
     .map((heading, index) => `<span class="heading" style="--depth:${index}">${escapeHtml(heading)}</span>`)
     .join("");
-  return `${folder}<a class="note" href="${escapeHtml(href)}">${escapeHtml(noteName)}</a>${headingHtml}`;
+  const listHtml = listContext
+    .map((item, index) =>
+      `<span class="list-context" style="--depth:${index}"><span class="list-bullet">↳</span>${escapeHtml(item)}</span>`
+    )
+    .join("");
+  return `${folder}<a class="note" href="${escapeHtml(href)}">${escapeHtml(noteName)}</a>${headingHtml}${listHtml}`;
 }
 
 export function sourceHref(vaultName: string, cardKey: string): string {

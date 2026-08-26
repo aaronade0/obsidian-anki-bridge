@@ -44,6 +44,53 @@ describe("FlashcardParser", () => {
     expect(card?.items[0]).toContain("nested example");
   });
 
+  it("creates supported inline cards inside List items without leaking their answers into the outer List card", () => {
+    const source = [
+      "# Mechanics",
+      "Name the concepts ⇢[%%oab:list:v1%%",
+      "- Motion",
+      "  - Velocity ⇢%%oab:basic:v1%%Change of position per time",
+      "  - Momentum ⇄%%oab:reverse:v1%%Mass times velocity",
+      "  - Energy is measured in ⟦%%oab:cloze:v1%%joules⟧%%oab:end:v1%%",
+      "]⇠%%oab:end:v1%%"
+    ].join("\n");
+    const cards = parser.parse(source);
+
+    expect(cards.map((card) => card.kind)).toEqual(["list", "basic", "reverse", "cloze"]);
+    expect(cards[0]?.items[0]).toContain("Velocity");
+    expect(cards[0]?.items[0]).not.toContain("Change of position per time");
+    expect(cards[1]).toMatchObject({
+      front: "Velocity",
+      back: "Change of position per time",
+      headingPath: ["Mechanics"],
+      listContext: ["Motion"]
+    });
+    expect(cards[2]).toMatchObject({
+      front: "Momentum",
+      back: "Mass times velocity",
+      listContext: ["Motion"]
+    });
+    expect(cards[3]).toMatchObject({
+      front: "Energy is measured in {{c1::joules}}",
+      listContext: ["Motion"]
+    });
+  });
+
+  it("uses ancestor list items as context for ordinary indented cards", () => {
+    const source = [
+      "# Physics",
+      "- Mechanics",
+      "  1. Dynamics",
+      "    - Force ⇢%%oab:basic:v1%%Mass times acceleration",
+      "- Optics",
+      "  - Refraction ⇢%%oab:basic:v1%%Change of direction"
+    ].join("\n");
+    const cards = parser.parse(source);
+
+    expect(cards[0]).toMatchObject({ front: "Force", listContext: ["Mechanics", "Dynamics"] });
+    expect(cards[1]).toMatchObject({ front: "Refraction", listContext: ["Optics"] });
+  });
+
   it("allows fenced code in dump cards but does not parse markers inside ordinary fences", () => {
     const source = [
       "```ts",

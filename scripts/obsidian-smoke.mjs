@@ -41,11 +41,22 @@ const keepAlive = setInterval(() => undefined, 1_000);
 const result = await command("Runtime.evaluate", {
   expression: `globalThis.__oabSmokeRun = (async () => {
     const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    const trustButton = [...document.querySelectorAll(".modal button")]
+      .find((button) => button.textContent?.includes("Trust author and enable plugins"));
+    if (trustButton) {
+      trustButton.click();
+      await sleep(500);
+      globalThis.app?.setting?.close();
+      await sleep(200);
+    }
+    if (!globalThis.app?.plugins?.plugins?.["anki-bridge"]) {
+      await globalThis.app?.plugins?.enablePlugin("anki-bridge");
+    }
     for (let attempt = 0; attempt < 50; attempt += 1) {
-      if (globalThis.app?.plugins?.plugins?.["obsidian-anki-bridge"]) break;
+      if (globalThis.app?.plugins?.plugins?.["anki-bridge"]) break;
       await sleep(100);
     }
-    const plugin = globalThis.app?.plugins?.plugins?.["obsidian-anki-bridge"];
+    const plugin = globalThis.app?.plugins?.plugins?.["anki-bridge"];
     if (!plugin) throw new Error("Plugin was not loaded by Obsidian.");
     for (const closeButton of document.querySelectorAll(".modal-close-button")) closeButton.click();
     await sleep(100);
@@ -135,7 +146,7 @@ const result = await command("Runtime.evaluate", {
     plugin.showHelp();
     await sleep(200);
     const helpModal = [...document.querySelectorAll(".modal")].at(-1);
-    const helpVisible = helpModal?.querySelector(".oab-help h1")?.textContent === "Obsidian Anki Bridge" &&
+    const helpVisible = helpModal?.querySelector(".oab-help h1")?.textContent === "Anki Bridge" &&
       helpModal?.querySelector(".oab-help")?.textContent?.includes("Card formats");
     helpModal?.querySelector(".modal-close-button")?.click();
 
@@ -374,7 +385,9 @@ const result = await command("Runtime.evaluate", {
     const directRegistryCleared = !plugin.data.cards.some((card) => card.sourcePath === directDeletePath) &&
       !plugin.data.files.some((entry) => entry.path === directDeletePath);
 
-    const ambiguousPath = "Temporary Ambiguous Note Disappearance " + Date.now() + ".md";
+    const ambiguousBase = "Temporary Ambiguous Note " + Date.now();
+    const ambiguousPath = ambiguousBase + ".md";
+    const ambiguousNewPath = ambiguousBase + " Moved.md";
     const ambiguousSource = "Ambiguous disappearance ⇢%%oab:basic:v1%%Keep this Anki note";
     const ambiguousFile = await globalThis.app.vault.create(ambiguousPath, ambiguousSource);
     await plugin.syncFileGuarded(ambiguousFile, false);
@@ -393,37 +406,100 @@ const result = await command("Runtime.evaluate", {
       conflict.code === "CARD_REMOVED" && conflict.path === ambiguousPath && conflict.resolvedAt === undefined
     );
     const ambiguousAnkiNoteRetained = Boolean(await plugin.client().noteInfo(ambiguousCard.ankiNoteId));
+    const movedAmbiguousFile = await globalThis.app.vault.create(ambiguousNewPath, ambiguousSource);
     plugin.showConflictReport();
     await sleep(100);
     const ambiguousReportModal = [...document.querySelectorAll(".modal")].at(-1);
     const ambiguousConflictItem = [...(ambiguousReportModal?.querySelectorAll(".oab-conflict") ?? [])].find((item) =>
       item.querySelector("code")?.textContent === ambiguousPath
     );
-    const ambiguousHasNoDeleteButton = Boolean(ambiguousConflictItem) &&
-      ![...(ambiguousConflictItem?.querySelectorAll("button") ?? [])].some((button) =>
-        button.textContent?.includes("Delete from Anki")
-      );
-    ambiguousReportModal?.querySelector(".modal-close-button")?.click();
-
-    const recreatedAmbiguousFile = await globalThis.app.vault.create(ambiguousPath, ambiguousSource);
+    const ambiguousButtons = [...(ambiguousConflictItem?.querySelectorAll("button") ?? [])];
+    const ambiguousDeleteButton = ambiguousButtons.find((button) => button.textContent?.includes("Delete all from Anki"));
+    const ambiguousNewPathButton = ambiguousButtons.find((button) => button.textContent?.includes("Set new path"));
+    const ambiguousResolutionButtonsVisible = Boolean(ambiguousDeleteButton) && Boolean(ambiguousNewPathButton);
+    ambiguousNewPathButton?.click();
+    await sleep(100);
+    const relinkModal = [...document.querySelectorAll(".modal")].at(-1);
+    const relinkInput = relinkModal?.querySelector(".oab-path-input");
+    const relinkConfirm = [...(relinkModal?.querySelectorAll(".oab-modal-actions button") ?? [])]
+      .find((button) => button.textContent?.includes("Use new path"));
+    if (relinkInput) relinkInput.value = ambiguousNewPath.slice(0, -3);
+    relinkConfirm?.click();
     for (let attempt = 0; attempt < 100; attempt += 1) {
-      const restored = ambiguousCard.status === "active" && !plugin.data.conflicts.some((conflict) =>
-        conflict.code === "FILE_MISSING" && conflict.path === ambiguousPath && conflict.resolvedAt === undefined
-      );
-      if (restored) break;
+      if (!document.body.contains(relinkModal) &&
+          ambiguousCard.sourcePath === ambiguousNewPath && !plugin.data.conflicts.some((conflict) =>
+        conflict.path === ambiguousPath && conflict.resolvedAt === undefined
+      )) break;
       await sleep(100);
     }
-    const ambiguousRestoreRecovered = ambiguousCard.status === "active" &&
-      Boolean(await plugin.client().noteInfo(ambiguousCard.ankiNoteId)) &&
+    const relinkedCardInfo = await plugin.client().noteInfo(ambiguousCard.ankiNoteId);
+    const relinkedCardIds = await plugin.client().invoke("findCards", { query: "nid:" + ambiguousCard.ankiNoteId });
+    const relinkedDecks = await plugin.client().invoke("cardsInfo", { cards: relinkedCardIds });
+    const expectedRelinkedDeck = "Obsidian Flashcards::test-vault::" + ambiguousNewPath.slice(0, -3);
+    const ambiguousRelinked = ambiguousCard.sourcePath === ambiguousNewPath &&
+      relinkedCardInfo?.noteId === ambiguousCard.ankiNoteId &&
+      relinkedDecks.every((card) => card.deckName === expectedRelinkedDeck) &&
       !plugin.data.conflicts.some((conflict) =>
-        conflict.code === "FILE_MISSING" && conflict.path === ambiguousPath && conflict.resolvedAt === undefined
+        conflict.path === ambiguousPath && conflict.resolvedAt === undefined
       );
+    ambiguousReportModal?.querySelector(".modal-close-button")?.click();
     await plugin.client().deleteNotes([ambiguousCard.ankiNoteId]);
-    plugin.data.cards = plugin.data.cards.filter((card) => card.sourcePath !== ambiguousPath);
-    plugin.data.files = plugin.data.files.filter((entry) => entry.path !== ambiguousPath);
-    plugin.data.conflicts = plugin.data.conflicts.filter((conflict) => conflict.path !== ambiguousPath);
+    plugin.data.cards = plugin.data.cards.filter((card) => card.sourcePath !== ambiguousNewPath);
+    plugin.data.files = plugin.data.files.filter((entry) => entry.path !== ambiguousNewPath);
+    plugin.data.conflicts = plugin.data.conflicts.filter((conflict) =>
+      conflict.path !== ambiguousPath && conflict.path !== ambiguousNewPath
+    );
     await plugin.savePluginData();
-    await globalThis.app.vault.delete(recreatedAmbiguousFile);
+    await globalThis.app.vault.delete(movedAmbiguousFile);
+
+    const externalDeletePath = "Temporary External Delete " + Date.now() + ".md";
+    const externalDeleteSource = [
+      "First externally deleted card ⇢%%oab:basic:v1%%First answer",
+      "Second externally deleted card ⇢%%oab:basic:v1%%Second answer"
+    ].join("\\n");
+    const externalDeleteFile = await globalThis.app.vault.create(externalDeletePath, externalDeleteSource);
+    await plugin.syncFileGuarded(externalDeleteFile, false);
+    const externalDeleteCards = plugin.data.cards.filter((card) => card.sourcePath === externalDeletePath);
+    const externalDeleteNoteIds = externalDeleteCards.map((card) => card.ankiNoteId).filter(Boolean);
+    if (externalDeleteCards.length !== 2 || externalDeleteNoteIds.length !== 2) {
+      throw new Error("External whole-file deletion test cards were not created.");
+    }
+    await globalThis.app.vault.delete(externalDeleteFile);
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      if (plugin.data.conflicts.some((conflict) =>
+        conflict.code === "FILE_MISSING" && conflict.path === externalDeletePath && conflict.resolvedAt === undefined
+      )) break;
+      await sleep(100);
+    }
+    plugin.showConflictReport();
+    await sleep(100);
+    const externalDeleteReport = [...document.querySelectorAll(".modal")].at(-1);
+    const externalDeleteConflictItem = [...(externalDeleteReport?.querySelectorAll(".oab-conflict") ?? [])].find((item) =>
+      item.querySelector("code")?.textContent === externalDeletePath
+    );
+    const deleteAllButton = [...(externalDeleteConflictItem?.querySelectorAll("button") ?? [])]
+      .find((button) => button.textContent?.includes("Delete all from Anki"));
+    deleteAllButton?.click();
+    await sleep(100);
+    const deleteAllConfirmation = [...document.querySelectorAll(".modal")].at(-1);
+    const deleteAllConfirmationVisible = deleteAllConfirmation?.querySelector("h2")?.textContent
+      ?.includes("Permanently delete all cards") === true;
+    const confirmDeleteAll = [...(deleteAllConfirmation?.querySelectorAll(".oab-modal-actions button") ?? [])]
+      .find((button) => button.textContent?.includes("Permanently delete all from Anki"));
+    confirmDeleteAll?.click();
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      if (!plugin.data.files.some((file) => file.path === externalDeletePath)) break;
+      await sleep(100);
+    }
+    const externalDeleteApplied = (await Promise.all(
+      externalDeleteNoteIds.map((noteId) => plugin.client().noteInfo(noteId))
+    )).every((note) => !note) &&
+      !plugin.data.cards.some((card) => card.sourcePath === externalDeletePath) &&
+      !plugin.data.files.some((file) => file.path === externalDeletePath) &&
+      !plugin.data.conflicts.some((conflict) =>
+        conflict.path === externalDeletePath && conflict.resolvedAt === undefined
+      );
+    externalDeleteReport?.querySelector(".modal-close-button")?.click();
 
     const mobileOutboxPath = "Temporary Mobile Outbox " + Date.now() + ".md";
     const mobileOutboxSource = "Queued on mobile ⇢%%oab:basic:v1%%First desktop answer";
@@ -501,6 +577,108 @@ const result = await command("Runtime.evaluate", {
     await plugin.savePluginData();
     await globalThis.app.vault.delete(externalScanFile);
 
+    const nestedPath = "Temporary Nested Cards " + Date.now() + ".md";
+    const nestedSource = [
+      "# Nested cards",
+      "- Parent item",
+      "  - Child item",
+      "    - Indented question ⇢%%oab:basic:v1%%Indented answer",
+      "Nested prompts ⇢[%%oab:list:v1%%",
+      "- Nested prompt ⇢%%oab:basic:v1%%Nested answer",
+      "- Plain list answer",
+      "]⇠%%oab:end:v1%%"
+    ].join("\\n");
+    const nestedFile = await globalThis.app.vault.create(nestedPath, nestedSource);
+    const nestedSummary = await plugin.syncFileGuarded(nestedFile, false);
+    const nestedRegistry = plugin.data.cards.filter((card) => card.sourcePath === nestedPath);
+    const indentedCard = nestedRegistry.find((card) => card.preview === "Indented question");
+    const nestedBasicCard = nestedRegistry.find((card) => card.preview === "Nested prompt");
+    const nestedListCard = nestedRegistry.find((card) => card.kind === "list");
+    const indentedNote = indentedCard?.ankiNoteId
+      ? await plugin.client().noteInfo(indentedCard.ankiNoteId)
+      : undefined;
+    const nestedBasicNote = nestedBasicCard?.ankiNoteId
+      ? await plugin.client().noteInfo(nestedBasicCard.ankiNoteId)
+      : undefined;
+    const nestedCardsCreated = nestedSummary?.desiredNotes === 4 &&
+      nestedRegistry.length === 3 && nestedListCard?.children.filter((child) => child.status === "active").length === 2 &&
+      nestedBasicNote?.fields?.Front?.value?.includes("Nested prompt") &&
+      nestedBasicNote?.fields?.Back?.value?.includes("Nested answer") &&
+      !nestedListCard?.children.some((child) => child.preview?.includes("Nested answer"));
+    const indentationContextRendered = indentedCard?.listContext?.join(" > ") === "Parent item > Child item" &&
+      indentedNote?.fields?.Context?.value?.includes('class="list-context"') &&
+      indentedNote.fields.Context.value.includes("Parent item") &&
+      indentedNote.fields.Context.value.includes("Child item");
+    const nestedWarningAbsent = !plugin.data.conflicts.some((conflict) =>
+      conflict.path === nestedPath && conflict.code === "NESTED_CARD_IGNORED" && conflict.resolvedAt === undefined
+    );
+
+    await globalThis.app.workspace.getLeaf(false).openFile(nestedFile);
+    await sleep(350);
+    const openedNoteIds = [];
+    const originalClientFactory = plugin.client;
+    plugin.client = () => ({ guiBrowseNotes: async (ids) => openedNoteIds.push([...ids]) });
+    const clickableMarker = document.querySelector('.oab-card-marker[data-oab-card-ordinal="0"]');
+    const markerPresent = Boolean(clickableMarker);
+    clickableMarker?.dispatchEvent(
+      new MouseEvent("click", { bubbles: true, cancelable: true })
+    );
+    await sleep(100);
+    plugin.client = originalClientFactory;
+    const markerClickOpenedCorrectCard = markerPresent &&
+      openedNoteIds.length === 1 && openedNoteIds[0]?.length === 1 &&
+      openedNoteIds[0]?.[0] === indentedCard?.ankiNoteId;
+    const cursorCommandRemoved = !globalThis.app.commands.commands[
+      "anki-bridge:open-current-card-in-anki"
+    ];
+
+    const cutSourcePath = "Temporary Cut Source " + Date.now() + ".md";
+    const cutTargetPath = "Temporary Cut Target " + Date.now() + ".md";
+    const cutCardSource = "Moved with progress ⇢%%oab:basic:v1%%Same answer";
+    const cutSourceFile = await globalThis.app.vault.create(cutSourcePath, cutCardSource);
+    await plugin.syncFileGuarded(cutSourceFile, false);
+    const cutOriginal = plugin.data.cards.find((card) => card.sourcePath === cutSourcePath);
+    if (!cutOriginal?.ankiNoteId) throw new Error("Cut/move setup did not create an Anki note.");
+    const cutOriginalKey = cutOriginal.key;
+    const cutOriginalNoteId = cutOriginal.ankiNoteId;
+    const cutOriginalCardIds = await plugin.client().invoke("findCards", { query: "nid:" + cutOriginalNoteId });
+    await globalThis.app.vault.modify(cutSourceFile, "Source remains, but the card was cut.");
+    const cutTargetFile = await globalThis.app.vault.create(cutTargetPath, cutCardSource);
+    await plugin.syncFileGuarded(cutTargetFile, false);
+    const cutMoved = plugin.data.cards.find((card) => card.sourcePath === cutTargetPath);
+    const cutMovedCardIds = await plugin.client().invoke("findCards", { query: "nid:" + cutOriginalNoteId });
+    const cutPreservedIdentity = cutMoved === cutOriginal &&
+      cutMoved?.key === cutOriginalKey && cutMoved.ankiNoteId === cutOriginalNoteId &&
+      JSON.stringify(cutMovedCardIds) === JSON.stringify(cutOriginalCardIds) &&
+      !plugin.data.cards.some((card) => card.sourcePath === cutSourcePath);
+
+    const copySourcePath = "Temporary Copy Source " + Date.now() + ".md";
+    const copyTargetPath = "Temporary Copy Target " + Date.now() + ".md";
+    const copyCardSource = "Copied card ⇢%%oab:basic:v1%%Copied answer";
+    const copySourceFile = await globalThis.app.vault.create(copySourcePath, copyCardSource);
+    await plugin.syncFileGuarded(copySourceFile, false);
+    const copyOriginal = plugin.data.cards.find((card) => card.sourcePath === copySourcePath);
+    const copyTargetFile = await globalThis.app.vault.create(copyTargetPath, copyCardSource);
+    await plugin.syncFileGuarded(copyTargetFile, false);
+    const copiedCard = plugin.data.cards.find((card) => card.sourcePath === copyTargetPath);
+    const copyCreatedNewIdentity = Boolean(copyOriginal?.ankiNoteId && copiedCard?.ankiNoteId) &&
+      copyOriginal?.key !== copiedCard?.key && copyOriginal?.ankiNoteId !== copiedCard?.ankiNoteId;
+
+    const temporaryFeaturePaths = [nestedPath, cutSourcePath, cutTargetPath, copySourcePath, copyTargetPath];
+    const temporaryFeatureCards = plugin.data.cards.filter((card) => temporaryFeaturePaths.includes(card.sourcePath));
+    const temporaryFeatureNoteIds = temporaryFeatureCards
+      .flatMap((card) => [card.ankiNoteId, ...card.children.map((child) => child.ankiNoteId)])
+      .filter(Boolean);
+    await plugin.client().deleteNotes(temporaryFeatureNoteIds);
+    plugin.data.cards = plugin.data.cards.filter((card) => !temporaryFeaturePaths.includes(card.sourcePath));
+    plugin.data.files = plugin.data.files.filter((entry) => !temporaryFeaturePaths.includes(entry.path));
+    plugin.data.conflicts = plugin.data.conflicts.filter((conflict) => !temporaryFeaturePaths.includes(conflict.path));
+    await plugin.savePluginData();
+    for (const temporaryPath of temporaryFeaturePaths) {
+      const temporaryFile = globalThis.app.vault.getAbstractFileByPath(temporaryPath);
+      if (temporaryFile) await globalThis.app.vault.delete(temporaryFile);
+    }
+
     return {
       pluginLoaded: true,
       summary,
@@ -547,8 +725,10 @@ const result = await command("Runtime.evaluate", {
       directRegistryCleared,
       ambiguousConflictOnly,
       ambiguousAnkiNoteRetained,
-      ambiguousHasNoDeleteButton,
-      ambiguousRestoreRecovered,
+      ambiguousResolutionButtonsVisible,
+      ambiguousRelinked,
+      deleteAllConfirmationVisible,
+      externalDeleteApplied,
       mobileOutboxCreated,
       mobileOutboxUpdated,
       sharedStateAvailable,
@@ -558,6 +738,13 @@ const result = await command("Runtime.evaluate", {
       mobileConfirmedDeletionApplied,
       mobileOutboxDrained,
       externalFileScanRecovered,
+      nestedCardsCreated,
+      indentationContextRendered,
+      nestedWarningAbsent,
+      markerClickOpenedCorrectCard,
+      cursorCommandRemoved,
+      cutPreservedIdentity,
+      copyCreatedNewIdentity,
       markerDecorations: document.querySelectorAll(".oab-card-marker").length,
       fieldDecorations: document.querySelectorAll(".oab-card-field").length,
       unresolvedConflicts: plugin.data.conflicts.filter((conflict) => conflict.resolvedAt === undefined)
@@ -609,7 +796,7 @@ const shortcutResult = await command("Runtime.evaluate", {
     await new Promise((resolve) => setTimeout(resolve, 150));
     const tail = editor?.getValue().slice(-80) ?? "";
     const expanded = tail.endsWith("Shortcut ⇢%%oab:basic:v1%%Answer");
-    const parsedBack = globalThis.app.plugins.plugins["obsidian-anki-bridge"].parser.parse(editor.getValue()).at(-1)?.back;
+    const parsedBack = globalThis.app.plugins.plugins["anki-bridge"].parser.parse(editor.getValue()).at(-1)?.back;
     const original = ${JSON.stringify(shortcutState.original)};
     const file = globalThis.app.vault.getAbstractFileByPath(${JSON.stringify(shortcutState.path)});
     editor.setValue(original);
@@ -635,7 +822,7 @@ const touchPickerResult = await command("Runtime.evaluate", {
     editor.setValue(candidate);
     editor.setCursor(editor.offsetToPos(candidate.length));
     editor.focus();
-    const commandId = "obsidian-anki-bridge:insert-flashcard";
+    const commandId = "anki-bridge:insert-flashcard";
     const registeredCommand = globalThis.app.commands.commands[commandId];
     const ribbonVisible = Boolean(document.querySelector('[aria-label="Insert Anki flashcard"]'));
     const executed = globalThis.app.commands.executeCommandById(commandId);
@@ -648,7 +835,7 @@ const touchPickerResult = await command("Runtime.evaluate", {
     editor.replaceSelection("Mobile answer");
     await new Promise((resolve) => setTimeout(resolve, 100));
     const tail = editor.getValue().slice(-100);
-    const parsed = globalThis.app.plugins.plugins["obsidian-anki-bridge"].parser.parse(editor.getValue()).at(-1);
+    const parsed = globalThis.app.plugins.plugins["anki-bridge"].parser.parse(editor.getValue()).at(-1);
     editor.setValue(original);
     await new Promise((resolve) => setTimeout(resolve, 100));
     await globalThis.app.vault.modify(file, original);
@@ -687,11 +874,15 @@ if (!value?.pluginLoaded || value.summary?.desiredNotes !== 7 || value.noteIds?.
     !value.directRestoreClearedPending || !value.directDeleteButtonsVisible ||
     value.directDeletedNotes !== 2 || !value.directAnkiNotesDeleted || !value.directRegistryCleared ||
     !value.ambiguousConflictOnly || !value.ambiguousAnkiNoteRetained ||
-    !value.ambiguousHasNoDeleteButton || !value.ambiguousRestoreRecovered ||
+    !value.ambiguousResolutionButtonsVisible || !value.ambiguousRelinked ||
+    !value.deleteAllConfirmationVisible || !value.externalDeleteApplied ||
     !value.mobileOutboxCreated || !value.mobileOutboxUpdated || !value.sharedStateAvailable ||
     !value.sharedOutboxUsed || !value.legacyOutboxMigrated || !value.mobileDeleteQuarantined ||
     !value.mobileConfirmedDeletionApplied || !value.mobileOutboxDrained ||
-    !value.externalFileScanRecovered ||
+    !value.externalFileScanRecovered || !value.nestedCardsCreated ||
+    !value.indentationContextRendered || !value.nestedWarningAbsent ||
+    !value.markerClickOpenedCorrectCard || !value.cursorCommandRemoved ||
+    !value.cutPreservedIdentity || !value.copyCreatedNewIdentity ||
     !value.shortcutExpansion || value.shortcutBack !== "Answer" ||
     !value.touchPicker?.commandRegistered || !value.touchPicker.commandHasIcon ||
     !value.touchPicker.ribbonVisible || !value.touchPicker.executed ||

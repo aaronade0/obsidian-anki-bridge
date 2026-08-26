@@ -224,8 +224,12 @@ export class AnkiConnectClient {
     return this.invoke<string>("storeMediaFile", { filename, data });
   }
 
-  async guiBrowseNote(noteId: number): Promise<void> {
-    await this.invoke("guiBrowse", { query: `nid:${noteId}` });
+  async guiBrowseNotes(noteIds: number[]): Promise<void> {
+    const uniqueIds = [...new Set(noteIds)].filter(Number.isSafeInteger);
+    if (uniqueIds.length === 0) {
+      return;
+    }
+    await this.invoke("guiBrowse", { query: uniqueIds.map((noteId) => `nid:${noteId}`).join(" OR ") });
   }
 }
 
@@ -256,6 +260,8 @@ const CARD_CSS = `
 .oab-context { color: #777; font-size: .72em; margin-bottom: 1.2rem; }
 .oab-context .note { color: #7c3aed; font-size: 1.25em; font-weight: 600; }
 .oab-context .heading { display: block; margin-left: calc(var(--depth, 0) * .7rem); font-size: calc(1em - var(--depth, 0) * .04em); }
+.oab-context .list-context { display: block; margin-left: calc((var(--depth, 0) + 1) * .7rem); font-size: .96em; }
+.oab-context .list-bullet { display: inline-block; width: 1.1em; opacity: .72; }
 main img, main video { display: block; max-width: 100%; height: auto; margin: .75rem auto; }
 main audio { width: 100%; }
 main figure { margin: 1rem 0; }

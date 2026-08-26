@@ -9,9 +9,12 @@ stays private until a coordinated disclosure is ready.
 
 ## Current boundary
 
-The current release is desktop-only and expects AnkiConnect on loopback. If an
-API key is configured, it is stored in Obsidian's plugin data. Do not expose
-AnkiConnect directly to an untrusted network.
+Desktop synchronization expects AnkiConnect on loopback by default. If an API
+key is configured, it is stored in Obsidian's plugin data. Do not expose
+AnkiConnect directly to an untrusted network. The plugin contains no telemetry,
+ads, hosted service, or AnkiWeb credentials.
 
-The future remote bridge is not implemented yet. It must not reuse the local
-trust model; it requires authenticated HTTPS and server-side authorization.
+On mobile, the plugin never contacts AnkiConnect. It writes schema-validated,
+device-separated events to the current vault. Desktop revalidates ownership and
+missing state before applying them through local AnkiConnect. Rich media is
+read only from the current vault and transferred to Anki by that local API.

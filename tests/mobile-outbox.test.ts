@@ -97,6 +97,34 @@ describe("mobile outbox", () => {
     ]);
   });
 
+  it("queues and coalesces a confirmed whole-file deletion", async () => {
+    const adapter = new MemoryAdapter();
+    const directory = ".obsidian/plugins/obsidian-anki-bridge/outbox";
+    const outbox = new MobileOutbox(adapter, directory, "device_a");
+    await outbox.enqueue({
+      type: "confirm-delete-file",
+      conflictKey: "conflict_first",
+      fileKey: "file_source",
+      path: "Deleted note.md"
+    }, 1);
+    await outbox.enqueue({
+      type: "confirm-delete-file",
+      conflictKey: "conflict_latest",
+      fileKey: "file_source",
+      path: "Deleted note.md"
+    }, 2);
+
+    const snapshot = await outbox.snapshot();
+    expect(snapshot.invalidFiles).toEqual([]);
+    expect(snapshot.events).toHaveLength(1);
+    expect(snapshot.events[0]?.event).toMatchObject({
+      type: "confirm-delete-file",
+      conflictKey: "conflict_latest",
+      fileKey: "file_source",
+      path: "Deleted note.md"
+    });
+  });
+
   it("rejects malformed or non-Markdown operations", async () => {
     const adapter = new MemoryAdapter();
     const directory = ".obsidian/plugins/obsidian-anki-bridge/outbox";
@@ -117,11 +145,22 @@ describe("mobile outbox", () => {
       type: "delete",
       path: "../Outside.md"
     }));
+    adapter.files.set(`${directory}/bad-confirmation.json`, JSON.stringify({
+      schemaVersion: 1,
+      id: "event_bad_confirmation",
+      deviceId: "device_a",
+      createdAt: 3,
+      type: "confirm-delete-file",
+      conflictKey: "conflict_a",
+      fileKey: "file_a",
+      path: "Attachment.png"
+    }));
     const outbox = new MobileOutbox(adapter, directory, "device_a");
 
     const snapshot = await outbox.snapshot();
     expect(snapshot.events).toEqual([]);
     expect(snapshot.invalidFiles).toEqual([
+      `${directory}/bad-confirmation.json`,
       `${directory}/bad-path.json`,
       `${directory}/traversal.json`
     ]);

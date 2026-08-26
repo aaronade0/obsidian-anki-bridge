@@ -5,6 +5,7 @@ export interface ReconcileResult {
   file: RegistryFile;
   activeCards: RegistryCard[];
   missingCards: RegistryCard[];
+  relocatedCards: Array<{ card: RegistryCard; oldPath: string }>;
 }
 
 export function reconcileFile(
@@ -13,7 +14,8 @@ export function reconcileFile(
   parsedCards: ParsedCard[],
   files: RegistryFile[],
   cards: RegistryCard[],
-  now = Date.now()
+  now = Date.now(),
+  movableCards: RegistryCard[] = []
 ): ReconcileResult {
   let file = files.find((candidate) => candidate.path === path);
   if (!file) {
@@ -33,6 +35,7 @@ export function reconcileFile(
   const existing = cards.filter((card) => card.fileKey === file.key);
   const unmatchedExisting = new Set(existing);
   const matches = new Map<ParsedCard, RegistryCard>();
+  const relocatedCards: Array<{ card: RegistryCard; oldPath: string }> = [];
 
   // Exact content matches survive reordering without relying on line numbers.
   for (const parsed of parsedCards) {
@@ -44,6 +47,26 @@ export function reconcileFile(
       matches.set(parsed, match);
       unmatchedExisting.delete(match);
     }
+  }
+
+  // A uniquely verified card that was cut from another still-existing note can
+  // be adopted before positional matching. Its bridge key and Anki note IDs
+  // therefore travel with the Markdown instead of creating a fresh note.
+  const unusedMovable = new Set(movableCards);
+  for (const parsed of parsedCards) {
+    if (matches.has(parsed)) {
+      continue;
+    }
+    const candidates = [...unusedMovable].filter(
+      (card) => card.kind === parsed.kind && card.fingerprint === parsed.fingerprint
+    );
+    if (candidates.length !== 1 || !candidates[0]) {
+      continue;
+    }
+    const match = candidates[0];
+    unusedMovable.delete(match);
+    matches.set(parsed, match);
+    relocatedCards.push({ card: match, oldPath: match.sourcePath });
   }
 
   // Edited cards keep their identity when their type and relative position agree.
@@ -79,12 +102,14 @@ export function reconcileFile(
     };
 
     card.sourcePath = path;
+    card.fileKey = file.key;
     card.kind = parsed.kind;
     card.fingerprint = parsed.fingerprint;
     card.ordinal = parsed.ordinal;
     card.startOffset = parsed.ranges.whole.from;
     card.endOffset = parsed.ranges.whole.to;
     card.headingPath = [...parsed.headingPath];
+    card.listContext = [...parsed.listContext];
     card.preview = cardPreview(parsed.front);
     card.status = "active";
     card.lastSeen = now;
@@ -101,7 +126,7 @@ export function reconcileFile(
     missing.status = "missing";
   }
 
-  return { file, activeCards, missingCards };
+  return { file, activeCards, missingCards, relocatedCards };
 }
 
 export function moveRegistryFile(file: RegistryFile, cards: RegistryCard[], newPath: string, now = Date.now()): void {

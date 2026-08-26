@@ -1,5 +1,4 @@
 import {
-  Editor,
   MarkdownRenderer,
   MarkdownView,
   Modal,
@@ -47,6 +46,7 @@ import type {
   SyncSummary
 } from "./types";
 import { ObsidianVisualRenderer } from "./visual-renderer";
+import { normalizeMarkdownPath } from "./vault-path";
 import README_MARKDOWN from "../README.md";
 
 const DEFAULT_SETTINGS: PluginSettings = {
@@ -66,6 +66,8 @@ const EXTERNAL_FULL_SCAN_INTERVAL_MS = 5 * 60_000;
 const SHARED_STATE_DIRECTORY = ".obsidian-anki-bridge";
 const SHARED_DATA_PATH = `${SHARED_STATE_DIRECTORY}/data.json`;
 const SHARED_MOBILE_OUTBOX_DIRECTORY = `${SHARED_STATE_DIRECTORY}/mobile-outbox`;
+const LEGACY_PLUGIN_ID = "obsidian-anki-bridge";
+const CURRENT_PLUGIN_ID = "anki-bridge";
 
 export default class ObsidianAnkiBridge extends Plugin {
   data: PluginData = emptyData();
@@ -73,6 +75,7 @@ export default class ObsidianAnkiBridge extends Plugin {
   private statusEl!: HTMLElement;
   private readonly pendingTimers = new Map<string, number>();
   private readonly activeSyncs = new Map<string, Promise<SyncSummary | undefined>>();
+  private syncQueue: Promise<void> = Promise.resolve();
   private readonly explicitDeletionPaths = new Set<string>();
   private readonly deletionIntentTimers = new Map<string, number>();
   private modelsSignature = "";
@@ -102,7 +105,7 @@ export default class ObsidianAnkiBridge extends Plugin {
     if (deviceId !== storedDeviceId) {
       this.app.saveLocalStorage(DEVICE_ID_STORAGE_KEY, deviceId);
     }
-    const pluginDirectory = this.manifest.dir ?? ".obsidian/plugins/obsidian-anki-bridge";
+    const pluginDirectory = this.manifest.dir ?? `.obsidian/plugins/${CURRENT_PLUGIN_ID}`;
     this.mobileOutbox = new MobileOutbox(
       this.app.vault.adapter,
       SHARED_MOBILE_OUTBOX_DIRECTORY,
@@ -113,10 +116,16 @@ export default class ObsidianAnkiBridge extends Plugin {
     if (legacyOutboxDirectory !== SHARED_MOBILE_OUTBOX_DIRECTORY) {
       this.mobileOutboxes.push(new MobileOutbox(this.app.vault.adapter, legacyOutboxDirectory, deviceId));
     }
+    const formerPluginDirectory = siblingPluginDirectory(pluginDirectory, LEGACY_PLUGIN_ID);
+    const formerOutboxDirectory = `${formerPluginDirectory}/mobile-outbox`;
+    if (formerOutboxDirectory !== SHARED_MOBILE_OUTBOX_DIRECTORY &&
+        formerOutboxDirectory !== legacyOutboxDirectory) {
+      this.mobileOutboxes.push(new MobileOutbox(this.app.vault.adapter, formerOutboxDirectory, deviceId));
+    }
     await this.refreshMobileOutboxCount();
     this.visualRenderer = new ObsidianVisualRenderer(
       this.app,
-      this.manifest.dir ?? ".obsidian/plugins/obsidian-anki-bridge"
+      this.manifest.dir ?? `.obsidian/plugins/${CURRENT_PLUGIN_ID}`
     );
     this.statusEl = this.addStatusBarItem();
     this.statusEl.addClass("oab-status");
@@ -124,10 +133,12 @@ export default class ObsidianAnkiBridge extends Plugin {
     this.updateStatus();
 
     this.addSettingTab(new BridgeSettingTab(this.app, this));
-    this.registerEditorExtension(createEditorExtensions(this.app, this.parser));
+    this.registerEditorExtension(createEditorExtensions(this.app, this.parser, {
+      openCard: (ordinal) => void this.openCardFromEditor(ordinal)
+    }));
     this.addRibbonIcon("plus-circle", "Insert Anki flashcard", () => this.openCardTypePicker());
     this.addRibbonIcon("refresh-cw", "Sync Obsidian flashcards", () => void this.syncCurrentFile(true));
-    this.addRibbonIcon("book-open", "Obsidian Anki Bridge – Open user guide", () => this.showHelp());
+    this.addRibbonIcon("book-open", "Anki Bridge – Open user guide", () => this.showHelp());
     this.registerCommands();
     this.registerEvent(this.app.workspace.on("editor-menu", (menu, editor) => {
       menu.addItem((item) => item
@@ -223,7 +234,14 @@ export default class ObsidianAnkiBridge extends Plugin {
   }
 
   async loadPluginData(): Promise<void> {
-    const local = (await this.loadData()) as Partial<PluginData> | null;
+    let local = (await this.loadData()) as Partial<PluginData> | null;
+    if (!local) {
+      const pluginDirectory = this.manifest.dir ?? `.obsidian/plugins/${CURRENT_PLUGIN_ID}`;
+      const formerDataPath = `${siblingPluginDirectory(pluginDirectory, LEGACY_PLUGIN_ID)}/data.json`;
+      if (await this.app.vault.adapter.exists(formerDataPath)) {
+        local = JSON.parse(await this.app.vault.adapter.read(formerDataPath)) as Partial<PluginData>;
+      }
+    }
     let shared: Partial<PluginData> | null = null;
     const sharedDataExists = await this.app.vault.adapter.exists(SHARED_DATA_PATH);
     if (sharedDataExists) {
@@ -235,6 +253,7 @@ export default class ObsidianAnkiBridge extends Plugin {
     this.data = hydratePluginData(DEFAULT_SETTINGS, local, shared);
     for (const card of this.data.cards) {
       card.children ??= [];
+      card.listContext ??= [];
       for (const child of card.children) {
         child.status ??= "active";
       }
@@ -279,7 +298,7 @@ export default class ObsidianAnkiBridge extends Plugin {
     } catch (error) {
       this.recordConflict("ANKI_UNREACHABLE", errorMessage(error));
       await this.savePluginData();
-      new Notice(`Obsidian Anki Bridge: ${errorMessage(error)}`, 12_000);
+      new Notice(`Anki Bridge: ${errorMessage(error)}`, 12_000);
     }
   }
 
@@ -314,11 +333,6 @@ export default class ObsidianAnkiBridge extends Plugin {
       id: "audit-moved-notes",
       name: "Find notes moved outside Obsidian",
       callback: () => void this.auditMovedFiles(true)
-    });
-    this.addCommand({
-      id: "open-current-card-in-anki",
-      name: "Open card at cursor in Anki",
-      editorCallback: (editor) => void this.openCardAtCursor(editor)
     });
     this.addCommand({
       id: "insert-basic-card",
@@ -728,6 +742,28 @@ export default class ObsidianAnkiBridge extends Plugin {
       return true;
     }
 
+    if (event.type === "confirm-delete-file") {
+      const exactConflict = this.data.conflicts.find((candidate) =>
+        candidate.key === event.conflictKey &&
+        candidate.path === event.path &&
+        candidate.resolvedAt === undefined &&
+        isMissingFileConflict(candidate)
+      );
+      const registered = this.data.files.find((candidate) =>
+        candidate.key === event.fileKey && candidate.path === event.path
+      );
+      const conflict = exactConflict ?? this.data.conflicts.find((candidate) =>
+        candidate.path === event.path &&
+        candidate.resolvedAt === undefined &&
+        isMissingFileConflict(candidate)
+      );
+      if (!conflict || !registered || registered.missingReason !== "unknown") {
+        return true;
+      }
+      await this.deleteMissingFile(conflict.key, event.fileKey);
+      return true;
+    }
+
     const conflict = this.data.conflicts.find((candidate) =>
       candidate.key === event.conflictKey &&
       candidate.cardKey === event.cardKey &&
@@ -770,12 +806,12 @@ export default class ObsidianAnkiBridge extends Plugin {
         await yieldToUi();
       }
       new Notice(
-        `Obsidian Anki Bridge: ${queued} note(s) queued for desktop Anki synchronization.`,
+        `Anki Bridge: ${queued} note(s) queued for desktop Anki synchronization.`,
         10_000
       );
       return;
     }
-    new Notice("Obsidian Anki Bridge: Background synchronization started.");
+    new Notice("Anki Bridge: Background synchronization started.");
     let synced = 0;
     let failed = 0;
     for (const file of this.app.vault.getMarkdownFiles()) {
@@ -788,7 +824,7 @@ export default class ObsidianAnkiBridge extends Plugin {
       result ? synced += 1 : failed += 1;
       await yieldToUi();
     }
-    new Notice(`Obsidian Anki Bridge: ${synced} notes synchronized, ${failed} failed.`, 10_000);
+    new Notice(`Anki Bridge: ${synced} notes synchronized, ${failed} failed.`, 10_000);
   }
 
   private async syncFileGuarded(
@@ -804,7 +840,7 @@ export default class ObsidianAnkiBridge extends Plugin {
     if (current) {
       return current;
     }
-    const run = this.syncFile(file, manual, sourceOverride).catch(async (error: unknown) => {
+    const run = this.syncQueue.then(() => this.syncFile(file, manual, sourceOverride)).catch(async (error: unknown) => {
       const message = errorMessage(error);
       this.recordConflict("SYNC_FAILED", message, file.path);
       await this.savePluginData();
@@ -815,6 +851,7 @@ export default class ObsidianAnkiBridge extends Plugin {
       }
       return undefined;
     }).finally(() => this.activeSyncs.delete(file.path));
+    this.syncQueue = run.then(() => undefined, () => undefined);
     this.activeSyncs.set(file.path, run);
     return run;
   }
@@ -829,7 +866,22 @@ export default class ObsidianAnkiBridge extends Plugin {
     }
 
     const parsed = this.parser.parse(source);
-    const reconciled = reconcileFile(file.path, source, parsed, this.data.files, this.data.cards);
+    const movableCards = await this.findMovableCards(file.path, parsed);
+    const reconciled = reconcileFile(
+      file.path,
+      source,
+      parsed,
+      this.data.files,
+      this.data.cards,
+      Date.now(),
+      movableCards
+    );
+    for (const relocated of reconciled.relocatedCards) {
+      this.resolveConflict("CARD_REMOVED", relocated.oldPath, relocated.card.key);
+      for (const child of relocated.card.children) {
+        this.resolveConflict("LIST_ITEM_REMOVED", relocated.oldPath, child.key);
+      }
+    }
     this.resolveConflict("FILE_MISSING", file.path);
     this.resolveConflict("FILE_MOVE_AMBIGUOUS", file.path);
     this.resolveConflict("INVALID_BLOCK", file.path);
@@ -1005,6 +1057,58 @@ export default class ObsidianAnkiBridge extends Plugin {
     return summary;
   }
 
+  private async findMovableCards(targetPath: string, parsedCards: ReturnType<FlashcardParser["parse"]>): Promise<RegistryCard[]> {
+    const demand = new Map<string, number>();
+    const additionsByKind = new Map<RegistryCard["kind"], number>();
+    for (const parsed of parsedCards) {
+      const signature = cardSignature(parsed.kind, parsed.fingerprint);
+      demand.set(signature, (demand.get(signature) ?? 0) + 1);
+      additionsByKind.set(parsed.kind, (additionsByKind.get(parsed.kind) ?? 0) + 1);
+    }
+    for (const card of this.data.cards.filter((candidate) => candidate.sourcePath === targetPath)) {
+      const signature = cardSignature(card.kind, card.fingerprint);
+      const remaining = demand.get(signature) ?? 0;
+      if (remaining > 0) {
+        demand.set(signature, remaining - 1);
+      }
+      additionsByKind.set(card.kind, (additionsByKind.get(card.kind) ?? 0) - 1);
+    }
+
+    const movable: RegistryCard[] = [];
+    for (const [signature, count] of demand) {
+      // Exact single-card moves are safe to infer. Repeated identical cards are
+      // intentionally left alone because Markdown contains no embedded IDs.
+      if (count !== 1) {
+        continue;
+      }
+      const kind = signature.slice(0, signature.indexOf("\u241f")) as RegistryCard["kind"];
+      if ((additionsByKind.get(kind) ?? 0) <= 0) {
+        continue;
+      }
+      const candidates = this.data.cards.filter((candidate) =>
+        candidate.sourcePath !== targetPath &&
+        cardSignature(candidate.kind, candidate.fingerprint) === signature
+      );
+      if (candidates.length !== 1 || !candidates[0]) {
+        continue;
+      }
+      const candidate = candidates[0];
+      const oldFile = this.app.vault.getAbstractFileByPath(candidate.sourcePath);
+      if (!(oldFile instanceof TFile) || oldFile.extension !== "md") {
+        continue;
+      }
+      const oldSource = await this.app.vault.read(oldFile);
+      const stillAtOldPath = this.parser.parse(oldSource).some((parsed) =>
+        parsed.kind === candidate.kind && parsed.fingerprint === candidate.fingerprint
+      );
+      if (!stillAtOldPath) {
+        movable.push(candidate);
+        additionsByKind.set(candidate.kind, (additionsByKind.get(candidate.kind) ?? 0) - 1);
+      }
+    }
+    return movable;
+  }
+
   private assignNoteId(note: DesiredAnkiNote, noteId: number): void {
     const parent = this.data.cards.find((card) => card.key === note.parentCardKey);
     if (!parent) {
@@ -1081,8 +1185,8 @@ export default class ObsidianAnkiBridge extends Plugin {
       await this.savePluginData();
       new Notice(
         cards.length === 0
-          ? "Obsidian Anki Bridge: The deleted note had no registered cards."
-          : `Obsidian Anki Bridge: ${cards.length} card(s) await deletion confirmation.`,
+          ? "Anki Bridge: The deleted note had no registered cards."
+          : `Anki Bridge: ${cards.length} card(s) await deletion confirmation.`,
         10_000
       );
       return;
@@ -1095,7 +1199,7 @@ export default class ObsidianAnkiBridge extends Plugin {
       path
     );
     await this.savePluginData();
-    new Notice("Obsidian Anki Bridge: A note may have been moved or deleted; its cards were kept for safety.", 10_000);
+    new Notice("Anki Bridge: A note may have been moved or deleted; its cards were kept for safety.", 10_000);
   }
 
   async auditMovedFiles(manual = false): Promise<void> {
@@ -1185,7 +1289,7 @@ export default class ObsidianAnkiBridge extends Plugin {
     }
   }
 
-  private async openCardAtCursor(editor: Editor): Promise<void> {
+  private async openCardFromEditor(ordinal: number): Promise<void> {
     if (Platform.isMobile) {
       new Notice("Opening the Anki browser is available only through desktop AnkiConnect.");
       return;
@@ -1194,20 +1298,20 @@ export default class ObsidianAnkiBridge extends Plugin {
     if (!(file instanceof TFile)) {
       return;
     }
-    const offset = editor.posToOffset(editor.getCursor());
-    const parsed = this.parser.parse(editor.getValue()).find(
-      (card) => offset >= card.ranges.whole.from && offset <= card.ranges.whole.to
+    const registry = this.data.cards.find((card) =>
+      card.sourcePath === file.path && card.ordinal === ordinal && card.status === "active"
     );
-    const registry = parsed
-      ? this.data.cards.find((card) => card.sourcePath === file.path && card.ordinal === parsed.ordinal && card.status === "active")
-      : undefined;
-    const noteId = registry?.ankiNoteId ?? registry?.children.find((child) => child.status === "active")?.ankiNoteId;
-    if (!noteId) {
-      new Notice("No Anki note is registered for the card at the cursor yet.");
+    const noteIds = registry?.ankiNoteId
+      ? [registry.ankiNoteId]
+      : registry?.children
+          .filter((child) => child.status === "active" && child.ankiNoteId !== undefined)
+          .map((child) => child.ankiNoteId as number) ?? [];
+    if (noteIds.length === 0) {
+      new Notice("No Anki note is registered for this card yet.");
       return;
     }
     try {
-      await this.client().guiBrowseNote(noteId);
+      await this.client().guiBrowseNotes(noteIds);
     } catch (error) {
       this.recordConflict("ANKI_OPEN_FAILED", errorMessage(error), file.path, registry?.key);
       await this.savePluginData();
@@ -1217,6 +1321,177 @@ export default class ObsidianAnkiBridge extends Plugin {
 
   private client(): AnkiConnectClient {
     return new AnkiConnectClient(this.bridgeSettings.ankiConnectUrl, this.bridgeSettings.ankiConnectApiKey);
+  }
+
+  async relinkMissingFile(conflictKey: string, rawNewPath: string): Promise<"moved" | "queued"> {
+    const conflict = this.data.conflicts.find((candidate) =>
+      candidate.key === conflictKey && candidate.resolvedAt === undefined && isMissingFileConflict(candidate)
+    );
+    if (!conflict?.path) {
+      throw new Error("This missing-note conflict is no longer current.");
+    }
+    const registered = this.data.files.find((candidate) => candidate.path === conflict.path);
+    if (!registered || registered.missingReason !== "unknown") {
+      throw new Error("The missing source note is no longer registered as an ambiguous external change.");
+    }
+    const newPath = normalizeMarkdownPath(rawNewPath);
+    if (newPath === registered.path) {
+      throw new Error("Enter the note's new path, not its previous path.");
+    }
+    const collision = this.data.files.find((candidate) => candidate.path === newPath && candidate.key !== registered.key);
+    if (collision) {
+      throw new Error("That path already belongs to a different registered source note.");
+    }
+    const target = this.app.vault.getAbstractFileByPath(newPath);
+    if (!(target instanceof TFile) || target.extension !== "md") {
+      throw new Error(`No Markdown note exists at “${newPath}” in this vault.`);
+    }
+
+    if (Platform.isMobile) {
+      await this.mobileOutbox.enqueue({ type: "rename", oldPath: registered.path, path: newPath });
+      await this.refreshMobileOutboxCount();
+      return "queued";
+    }
+
+    const oldPath = registered.path;
+    moveRegistryFile(registered, this.data.cards, newPath);
+    this.resolveConflict("FILE_MISSING", oldPath);
+    this.resolveConflict("FILE_MOVE_AMBIGUOUS", oldPath);
+    await this.savePluginData();
+    await this.syncFileGuarded(target, false);
+    return "moved";
+  }
+
+  async deleteMissingFile(conflictKey: string, expectedFileKey?: string): Promise<number> {
+    const conflict = this.data.conflicts.find((candidate) =>
+      candidate.key === conflictKey && candidate.resolvedAt === undefined && isMissingFileConflict(candidate)
+    );
+    if (!conflict?.path) {
+      throw new Error("This missing-note conflict is no longer current.");
+    }
+    const registered = this.data.files.find((candidate) =>
+      candidate.path === conflict.path && (expectedFileKey === undefined || candidate.key === expectedFileKey)
+    );
+    if (!registered || registered.missingReason !== "unknown") {
+      throw new Error("The missing source note is no longer registered as an ambiguous external change.");
+    }
+    if (this.app.vault.getAbstractFileByPath(registered.path) instanceof TFile) {
+      throw new Error("The source note exists again. Synchronize it instead of deleting its Anki cards.");
+    }
+    const fileCards = this.data.cards.filter((candidate) => candidate.fileKey === registered.key);
+    if (fileCards.some((card) =>
+      card.status !== "missing" || card.children.some((child) => child.status !== "missing")
+    )) {
+      throw new Error("At least one registered card is active again; nothing was deleted.");
+    }
+
+    if (Platform.isMobile) {
+      await this.mobileOutbox.enqueue({
+        type: "confirm-delete-file",
+        conflictKey: conflict.key,
+        fileKey: registered.key,
+        path: registered.path
+      });
+      await this.refreshMobileOutboxCount();
+      return -1;
+    }
+
+    const ownedNotes = fileCards.flatMap((card) => [
+      { key: card.key, noteId: card.ankiNoteId },
+      ...card.children.map((child) => ({ key: child.key, noteId: child.ankiNoteId }))
+    ]);
+    const client = this.client();
+    try {
+      await client.ping();
+      const noteIds = await this.verifiedOwnedNoteIds(client, ownedNotes);
+
+      const latestFile = this.data.files.find((candidate) =>
+        candidate.key === registered.key && candidate.path === conflict.path
+      );
+      const latestCards = this.data.cards.filter((candidate) => candidate.fileKey === registered.key);
+      const stillMissing = latestFile !== undefined &&
+        !(this.app.vault.getAbstractFileByPath(latestFile.path) instanceof TFile) &&
+        latestCards.every((card) =>
+          card.status === "missing" && card.children.every((child) => child.status === "missing")
+        );
+      if (!stillMissing) {
+        throw new Error("The source note or one of its cards became active during confirmation; nothing was deleted.");
+      }
+
+      await client.deleteNotes([...noteIds]);
+      await this.verifyOwnedNotesDeleted(client, ownedNotes, noteIds);
+
+      const ownedKeys = new Set(ownedNotes.map((owned) => owned.key));
+      this.data.cards = this.data.cards.filter((card) => card.fileKey !== registered.key);
+      this.data.files = this.data.files.filter((file) => file.key !== registered.key);
+      this.resolveConflict("FILE_MISSING", conflict.path);
+      this.resolveConflict("FILE_MOVE_AMBIGUOUS", conflict.path);
+      for (const key of ownedKeys) {
+        this.resolveConflict("CARD_REMOVED", conflict.path, key);
+        this.resolveConflict("LIST_ITEM_REMOVED", conflict.path, key);
+        this.resolveConflict("ANKI_DELETE_FAILED", conflict.path, key);
+      }
+      this.resolveConflict("ANKI_DELETE_FAILED", conflict.path);
+      await this.savePluginData();
+      return noteIds.size;
+    } catch (error) {
+      this.recordConflict(
+        "ANKI_DELETE_FAILED",
+        `Confirmed source-note deletion failed: ${errorMessage(error)}`,
+        conflict.path
+      );
+      await this.savePluginData();
+      throw error;
+    }
+  }
+
+  private async verifiedOwnedNoteIds(
+    client: AnkiConnectClient,
+    ownedNotes: Array<{ key: string; noteId?: number }>
+  ): Promise<Set<number>> {
+    const noteIds = new Set<number>();
+    const ownersByNoteId = new Map<number, string>();
+    for (const owned of ownedNotes) {
+      const matches = new Set(await client.findNoteIdsByCardKey(owned.key));
+      if (owned.noteId !== undefined) {
+        const info = await client.noteInfo(owned.noteId);
+        if (info) {
+          if (!noteBelongsToCardKey(info, owned.key)) {
+            throw new Error("A stored Anki mapping points to an unrelated note; nothing was deleted.");
+          }
+          matches.add(owned.noteId);
+        }
+      }
+      if (matches.size > 1) {
+        throw new Error("Multiple Anki notes use the same bridge ID; nothing was deleted.");
+      }
+      for (const noteId of matches) {
+        const priorOwner = ownersByNoteId.get(noteId);
+        if (priorOwner !== undefined && priorOwner !== owned.key) {
+          throw new Error("One Anki note is mapped to multiple bridge IDs; nothing was deleted.");
+        }
+        ownersByNoteId.set(noteId, owned.key);
+        noteIds.add(noteId);
+      }
+    }
+    return noteIds;
+  }
+
+  private async verifyOwnedNotesDeleted(
+    client: AnkiConnectClient,
+    ownedNotes: Array<{ key: string; noteId?: number }>,
+    noteIds: Set<number>
+  ): Promise<void> {
+    for (const noteId of noteIds) {
+      if (await client.noteInfo(noteId)) {
+        throw new Error("Anki did not fully apply the confirmed deletion.");
+      }
+    }
+    for (const owned of ownedNotes) {
+      if ((await client.findNoteIdsByCardKey(owned.key)).length > 0) {
+        throw new Error("An Anki note with this bridge ID still exists after deletion.");
+      }
+    }
   }
 
   async deleteRemovedCard(conflictKey: string): Promise<number> {
@@ -1251,25 +1526,7 @@ export default class ObsidianAnkiBridge extends Plugin {
     const client = this.client();
     try {
       await client.ping();
-      const noteIds = new Set<number>();
-      for (const owned of ownedNotes) {
-        const matches = new Set(await client.findNoteIdsByCardKey(owned.key));
-        if (owned.noteId !== undefined) {
-          const info = await client.noteInfo(owned.noteId);
-          if (info) {
-            if (!noteBelongsToCardKey(info, owned.key)) {
-              throw new Error("The stored Anki mapping points to an unrelated note; nothing was deleted.");
-            }
-            matches.add(owned.noteId);
-          }
-        }
-        if (matches.size > 1) {
-          throw new Error("Multiple Anki notes use the same bridge ID; nothing was deleted.");
-        }
-        for (const noteId of matches) {
-          noteIds.add(noteId);
-        }
-      }
+      const noteIds = await this.verifiedOwnedNoteIds(client, ownedNotes);
 
       const latestTarget = findRegistryTarget(this.data.cards, conflict.cardKey);
       const latestStillMissing = latestTarget?.child
@@ -1280,16 +1537,7 @@ export default class ObsidianAnkiBridge extends Plugin {
       }
 
       await client.deleteNotes([...noteIds]);
-      for (const noteId of noteIds) {
-        if (await client.noteInfo(noteId)) {
-          throw new Error("Anki did not fully apply the confirmed deletion.");
-        }
-      }
-      for (const owned of ownedNotes) {
-        if ((await client.findNoteIdsByCardKey(owned.key)).length > 0) {
-          throw new Error("An Anki note with this bridge ID still exists after deletion.");
-        }
-      }
+      await this.verifyOwnedNotesDeleted(client, ownedNotes, noteIds);
 
       if (target.child) {
         target.card.children = target.card.children.filter((child) => child.key !== target.child?.key);
@@ -1407,7 +1655,7 @@ class ConflictModal extends Modal {
 
   private render(): void {
     this.contentEl.empty();
-    this.contentEl.createEl("h2", { text: "Obsidian Anki Bridge – Conflicts and deletions" });
+    this.contentEl.createEl("h2", { text: "Anki Bridge – Conflicts and deletions" });
     const conflicts = unresolvedConflicts(this.plugin.data.conflicts);
     if (this.plugin.queuedMobileActionCount > 0) {
       this.contentEl.createEl("p", {
@@ -1439,6 +1687,18 @@ class ConflictModal extends Modal {
         button.addClass("mod-warning");
         button.addEventListener("click", () => {
           new DeleteConfirmationModal(this.plugin, conflict, () => this.render()).open();
+        });
+      } else if (isActionableMissingFileConflict(this.plugin.data, conflict)) {
+        const actions = item.createDiv({ cls: "oab-conflict-actions" });
+        const deleteButton = actions.createEl("button", { text: "Delete all from Anki …" });
+        deleteButton.addClass("mod-warning");
+        deleteButton.addEventListener("click", () => {
+          new MissingFileDeleteConfirmationModal(this.plugin, conflict, () => this.render()).open();
+        });
+        const relinkButton = actions.createEl("button", { text: "Set new path …" });
+        relinkButton.addClass("mod-cta");
+        relinkButton.addEventListener("click", () => {
+          new MissingFileRelinkModal(this.plugin, conflict, () => this.render()).open();
         });
       }
     }
@@ -1499,6 +1759,130 @@ class DeleteConfirmationModal extends Modal {
   }
 }
 
+class MissingFileDeleteConfirmationModal extends Modal {
+  constructor(
+    private readonly plugin: ObsidianAnkiBridge,
+    private readonly conflict: SyncConflict,
+    private readonly onDeleted: () => void
+  ) {
+    super(plugin.app);
+  }
+
+  onOpen(): void {
+    this.contentEl.empty();
+    this.contentEl.createEl("h2", { text: "Permanently delete all cards from this note?" });
+    this.contentEl.createEl("p", {
+      text: "Use this only if the source note was deleted, not moved. This permanently deletes every Anki card generated from it, including learning progress and review history."
+    });
+    if (this.conflict.path) {
+      this.contentEl.createEl("code", { text: this.conflict.path });
+    }
+    const registered = this.plugin.data.files.find((file) => file.path === this.conflict.path);
+    const cards = registered
+      ? this.plugin.data.cards.filter((card) => card.fileKey === registered.key)
+      : [];
+    const knownAnkiNotes = new Set(cards.flatMap((card) => [
+      card.ankiNoteId,
+      ...card.children.map((child) => child.ankiNoteId)
+    ]).filter((noteId): noteId is number => noteId !== undefined));
+    this.contentEl.createEl("p", {
+      text: `${cards.length} registered source card(s), ${knownAnkiNotes.size} known Anki note(s). Ownership is verified again before anything is deleted.`
+    });
+    const actions = this.contentEl.createDiv({ cls: "oab-modal-actions" });
+    const cancel = actions.createEl("button", { text: "Cancel" });
+    cancel.addEventListener("click", () => this.close());
+    const confirm = actions.createEl("button", { text: "Permanently delete all from Anki" });
+    confirm.addClasses(["mod-cta", "mod-warning"]);
+    confirm.addEventListener("click", () => {
+      cancel.disabled = true;
+      confirm.disabled = true;
+      confirm.setText("Deleting …");
+      void this.plugin.deleteMissingFile(this.conflict.key).then((deletedNotes) => {
+        new Notice(
+          deletedNotes === -1
+            ? "File deletion confirmed and queued. Desktop AnkiConnect will verify and apply it when available."
+            : deletedNotes === 0
+            ? "No owned Anki notes remained; the source-note registry entry was cleaned up."
+            : `${deletedNotes} Anki note(s) permanently deleted.`,
+          10_000
+        );
+        this.close();
+        this.onDeleted();
+      }).catch((error: unknown) => {
+        new Notice(`Deletion failed: ${errorMessage(error)}\nThe entry remains in the report.`, 12_000);
+        cancel.disabled = false;
+        confirm.disabled = false;
+        confirm.setText("Try again");
+      });
+    });
+  }
+}
+
+class MissingFileRelinkModal extends Modal {
+  constructor(
+    private readonly plugin: ObsidianAnkiBridge,
+    private readonly conflict: SyncConflict,
+    private readonly onRelinked: () => void
+  ) {
+    super(plugin.app);
+  }
+
+  onOpen(): void {
+    this.contentEl.empty();
+    this.contentEl.createEl("h2", { text: "Set the note's new Obsidian path" });
+    this.contentEl.createEl("p", {
+      text: "Enter the path relative to the vault root. The Markdown file must already exist; the bridge keeps the existing card identities and review history."
+    });
+    if (this.conflict.path) {
+      const previous = this.contentEl.createDiv({ cls: "oab-path-row" });
+      previous.createSpan({ text: "Previous path" });
+      previous.createEl("code", { text: this.conflict.path });
+    }
+    const input = this.contentEl.createEl("input", {
+      type: "text",
+      placeholder: "Folder/Note.md",
+      cls: "oab-path-input"
+    });
+    input.setAttr("aria-label", "New Obsidian path");
+    const actions = this.contentEl.createDiv({ cls: "oab-modal-actions" });
+    const cancel = actions.createEl("button", { text: "Cancel" });
+    cancel.addEventListener("click", () => this.close());
+    const confirm = actions.createEl("button", { text: "Use new path" });
+    confirm.addClass("mod-cta");
+    const submit = (): void => {
+      cancel.disabled = true;
+      confirm.disabled = true;
+      input.disabled = true;
+      confirm.setText("Checking …");
+      void this.plugin.relinkMissingFile(this.conflict.key, input.value).then((result) => {
+        new Notice(
+          result === "queued"
+            ? "The new path is queued. Desktop Obsidian will verify it and update Anki when available."
+            : "The source note was relinked and its Anki cards were synchronized to the new path.",
+          10_000
+        );
+        this.close();
+        this.onRelinked();
+      }).catch((error: unknown) => {
+        new Notice(`New path was not applied: ${errorMessage(error)}`, 12_000);
+        cancel.disabled = false;
+        confirm.disabled = false;
+        input.disabled = false;
+        confirm.setText("Use new path");
+        input.focus();
+      });
+    };
+    confirm.addEventListener("click", submit);
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        submit();
+      }
+    });
+    window.setTimeout(() => input.focus(), 0);
+  }
+}
+
 class HelpModal extends Modal {
   constructor(private readonly plugin: ObsidianAnkiBridge) {
     super(plugin.app);
@@ -1525,6 +1909,22 @@ function unresolvedConflicts(conflicts: SyncConflict[]): SyncConflict[] {
 
 function isRemovalConflict(conflict: SyncConflict): boolean {
   return conflict.code === "CARD_REMOVED" || conflict.code === "LIST_ITEM_REMOVED";
+}
+
+function isMissingFileConflict(conflict: SyncConflict): boolean {
+  return conflict.code === "FILE_MISSING" || conflict.code === "FILE_MOVE_AMBIGUOUS";
+}
+
+function isActionableMissingFileConflict(data: PluginData, conflict: SyncConflict): boolean {
+  if (!isMissingFileConflict(conflict) || !conflict.path) {
+    return false;
+  }
+  const registered = data.files.find((file) =>
+    file.path === conflict.path && file.missingReason === "unknown"
+  );
+  return registered !== undefined && data.cards
+    .filter((card) => card.fileKey === registered.key)
+    .every((card) => card.status === "missing" && card.children.every((child) => child.status === "missing"));
 }
 
 function conflictTitle(conflict: SyncConflict): string {
@@ -1596,11 +1996,20 @@ function syntaxWarnings(
     if (nestedSource && containsCanonicalMarker(nestedSource)) {
       warnings.push({
         code: "NESTED_CARD_IGNORED",
-        message: "A nested card inside a list or dump card was intentionally ignored to prevent corrupted cards."
+        message: "A nested List or Dump block is not supported. Inline cards inside List items are supported and synchronized separately."
       });
     }
   }
   return warnings;
+}
+
+function cardSignature(kind: RegistryCard["kind"], fingerprint: string): string {
+  return `${kind}\u241f${fingerprint}`;
+}
+
+function siblingPluginDirectory(pluginDirectory: string, pluginId: string): string {
+  const separator = pluginDirectory.lastIndexOf("/");
+  return separator >= 0 ? `${pluginDirectory.slice(0, separator)}/${pluginId}` : pluginId;
 }
 
 function errorMessage(error: unknown): string {

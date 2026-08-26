@@ -10,10 +10,11 @@ export function sanitizeDeckSegment(segment: string): string {
   return segment.replace(/::/g, "∷").replace(/[\r\n\t]/g, " ").trim();
 }
 
-export function sourceContext(sourcePath: string, headingPath: string[]): {
+export function sourceContext(sourcePath: string, headingPath: string[], listContext: string[] = []): {
   folderPath: string;
   noteName: string;
   headingPath: string[];
+  listContext: string[];
 } {
   const normalized = sourcePath.replace(/\\/g, "/");
   const segments = normalized.split("/").filter(Boolean);
@@ -26,6 +27,7 @@ export function sourceContext(sourcePath: string, headingPath: string[]): {
   return {
     folderPath: segments.join("/"),
     noteName,
-    headingPath: cleanedHeadings
+    headingPath: cleanedHeadings,
+    listContext: [...listContext]
   };
 }

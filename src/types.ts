@@ -23,6 +23,7 @@ export interface ParsedCard {
   items: string[];
   priority?: Priority;
   headingPath: string[];
+  listContext: string[];
   fingerprint: string;
   startLine: number;
   endLine: number;
@@ -58,6 +59,7 @@ export interface RegistryCard {
   startOffset: number;
   endOffset: number;
   headingPath: string[];
+  listContext?: string[];
   preview?: string;
   status: RegistryStatus;
   ankiNoteId?: number;

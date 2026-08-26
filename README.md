@@ -1,6 +1,6 @@
-# Obsidian Anki Bridge
+# Anki Bridge
 
-Obsidian Anki Bridge creates and updates Anki flashcards directly from an
+Anki Bridge creates and updates Anki flashcards directly from an
 Obsidian vault. Card identities are stored in the plugin's private data file,
 so no generated IDs are written into Markdown notes.
 
@@ -12,24 +12,31 @@ are open. No server, mobile Anki API, or additional account is required.
 
 ## Installation
 
-The plugin is not in Obsidian's Community Plugins catalog yet. Install the
+The plugin is prepared for Obsidian's Community Plugins directory and awaiting
+its initial directory submission. Until the listing is approved, install the
 current GitHub release manually:
 
-1. Download `obsidian-anki-bridge-<version>.zip` from the
+1. Download `anki-bridge-<version>.zip` from the
    [latest release](https://github.com/aaronade0/obsidian-anki-bridge/releases/latest).
-2. Extract the contained `obsidian-anki-bridge` folder into
+2. Extract the contained `anki-bridge` folder into
    `<vault>/.obsidian/plugins/`.
 3. Reload Obsidian, open **Settings → Community plugins**, and enable
-   **Obsidian Anki Bridge**.
+   **Anki Bridge**.
 4. On the desktop, install
    [AnkiConnect](https://ankiweb.net/shared/info/2055492159), start Anki, and use
    **Test connection** in the bridge settings.
 5. To create or edit cards on a phone or tablet, synchronize the complete vault
-   including `.obsidian/plugins/obsidian-anki-bridge`. No mobile connection
+   including `.obsidian/plugins/anki-bridge`. No mobile connection
    setup is needed.
 
 The release bundle includes the PDF.js worker required for PDF previews. Do
 not download only `main.js`; use the complete ZIP archive.
+
+Versions before 1.0.0 used the plugin ID `obsidian-anki-bridge`. Install 1.0.0
+into the new `anki-bridge` folder and enable **Anki Bridge**. The plugin reads
+the existing vault-global `.obsidian-anki-bridge` registry and migrates the old
+plugin-local settings/outbox, so Anki note IDs and review history are retained.
+After verifying the migration, the disabled old plugin folder can be removed.
 
 ## Quick start
 
@@ -63,7 +70,7 @@ palette.
 The complete guide can also be opened inside Obsidian in three ways:
 
 - click the book icon in the left ribbon;
-- choose **Obsidian Anki Bridge: Open user guide** in the command palette; or
+- choose **Anki Bridge: Open user guide** in the command palette; or
 - open the plugin settings and select **Open guide**.
 
 ## Mobile workflow
@@ -162,6 +169,22 @@ Name the three laws ⇢[%%oab:list:v1%%
 Numbered lists are supported as well. Indented lines and nested lists remain
 part of their parent item.
 
+List items may themselves contain Basic, Reversible, Cloze, or Image Occlusion
+markers. The item front remains part of the outer List card, while the nested
+marker creates an additional independently scheduled Anki note. Its answer is
+not exposed on the outer List card:
+
+```markdown
+Name the quantities ⇢[%%oab:list:v1%%
+- Velocity ⇢%%oab:basic:v1%%Change of position per time
+- Momentum ⇄%%oab:reverse:v1%%Mass times velocity
+]⇠%%oab:end:v1%%
+```
+
+Nested List and Dump blocks are intentionally rejected because their closing
+markers would be ambiguous. Use an inline nested card or place the inner block
+after the outer block instead.
+
 ### Dump card
 
 Use a dump card for a larger, multi-line answer containing Markdown, code,
@@ -243,6 +266,15 @@ The front of every Anki card shows its folder, source note, and heading
 context. The highlighted note name is the link. Selecting it opens the exact
 source note in Obsidian, scrolls to the card, and briefly highlights it.
 
+In Obsidian, the visible card-type symbol itself is clickable. Selecting `⇢`,
+`⇄`, `⇢[`, `⇢{`, `⇢▣`, or `⟦` opens that card in Anki's browser through local
+AnkiConnect. A List marker opens all active notes belonging to that List card.
+This desktop action replaces the former cursor-based command.
+
+Indented list ancestors are shown below the folder, note, and heading context
+on the Anki front. For example, a card below `Mechanics` → `Dynamics` carries
+both list entries as context without adding them to the card answer.
+
 No redundant source path or separate “Open in Obsidian” link is added to the
 back of the card.
 
@@ -270,9 +302,25 @@ If a source note disappears without a deletion action observed inside Obsidian
 (for example through a sync client or file manager), the bridge cannot safely
 distinguish a deletion from a move. It therefore shows a non-destructive
 **Source note missing or moved** conflict, keeps all associated Anki notes, and
-runs a periodic path audit. No Anki deletion button is offered for this
-ambiguous state. If the same source file is found at a new path, the registry
-and Anki deck path are updated.
+runs a periodic path audit. The conflict offers two explicitly confirmed
+resolutions:
+
+- **Delete all from Anki…** permanently deletes every owned Anki note from the
+  missing source file after rechecking its ownership and confirming that the
+  source is still absent.
+- **Set new path…** accepts an existing vault-relative Markdown path, keeps the
+  bridge IDs and review history, and updates the Anki deck/source link to the
+  new location. Paths already owned by another registered note are rejected.
+
+If the periodic audit finds the same source file unambiguously before either
+action is chosen, the registry and Anki deck path are updated automatically.
+
+Cutting an unchanged card from one still-existing Markdown note and pasting it
+into another also preserves the bridge key, Anki note/card IDs, scheduling, and
+review history. The transfer is inferred only when the exact card fingerprint
+is unique and the card is confirmed absent from its old source. Copying keeps
+the original in place and therefore creates a new card. Ambiguous or edited
+during-move cases are never guessed.
 
 ## Deck structure
 
@@ -301,6 +349,16 @@ Renames and unambiguous file moves also move the corresponding Anki cards.
   in the conflict report.
 - Nothing is deleted from Anki without explicit confirmation.
 
+## Network and data access
+
+The plugin contains no telemetry, ads, account system, or hosted bridge. On
+desktop it sends card operations only to the user-configured AnkiConnect HTTP
+address, which defaults to `http://127.0.0.1:8765`. On mobile it performs no
+network request to Anki; it writes validated events and registry state only
+inside the current Obsidian vault for the user's chosen vault-sync service to
+transport. Rich-media files are read only from the current vault and copied to
+Anki through AnkiConnect.
+
 ## Settings
 
 On desktop, the settings page contains the AnkiConnect address and optional API
@@ -325,5 +383,5 @@ Architecture details are documented in [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## License
 
-Obsidian Anki Bridge is available under the [MIT License](LICENSE). Release
+Anki Bridge is available under the [MIT License](LICENSE). Release
 bundles also include the licenses of bundled third-party dependencies.

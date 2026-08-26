@@ -23,7 +23,15 @@ export function openCardTypeModal(app: App, editor: Editor): void {
   new CardTypeModal(app, (choice) => insertCardTemplate(editor, choice)).open();
 }
 
-export function createEditorExtensions(app: App, parser: FlashcardParser): Extension[] {
+export interface EditorCardActions {
+  openCard(ordinal: number): void;
+}
+
+export function createEditorExtensions(
+  app: App,
+  parser: FlashcardParser,
+  cardActions: EditorCardActions
+): Extension[] {
   const decorations = ViewPlugin.fromClass(
     class {
       decorations: DecorationSet;
@@ -105,7 +113,41 @@ export function createEditorExtensions(app: App, parser: FlashcardParser): Exten
     }
   );
 
-  return [decorations, mobileTemplateTrigger, Prec.highest(templateKeymap)];
+  const clickableMarkers = EditorView.domEventHandlers({
+    click(event): boolean {
+      const ordinal = markerOrdinal(event.target);
+      if (ordinal === undefined) {
+        return false;
+      }
+      event.preventDefault();
+      cardActions.openCard(ordinal);
+      return true;
+    },
+    keydown(event): boolean {
+      if (event.key !== "Enter" && event.key !== " ") {
+        return false;
+      }
+      const ordinal = markerOrdinal(event.target);
+      if (ordinal === undefined) {
+        return false;
+      }
+      event.preventDefault();
+      cardActions.openCard(ordinal);
+      return true;
+    }
+  });
+
+  return [decorations, clickableMarkers, mobileTemplateTrigger, Prec.highest(templateKeymap)];
+}
+
+function markerOrdinal(target: EventTarget | null): number | undefined {
+  const element = target instanceof Element ? target.closest<HTMLElement>(".oab-card-marker[data-oab-card-ordinal]") : null;
+  const raw = element?.dataset.oabCardOrdinal;
+  if (raw === undefined) {
+    return undefined;
+  }
+  const ordinal = Number.parseInt(raw, 10);
+  return Number.isSafeInteger(ordinal) && ordinal >= 0 ? ordinal : undefined;
 }
 
 function replaceTriggerWithTemplate(
@@ -180,7 +222,13 @@ function buildDecorations(view: EditorView, parser: FlashcardParser): Decoration
       ranges,
       card.ranges.marker.from,
       Math.min(card.ranges.marker.from + visibleLength, card.ranges.marker.to),
-      "oab-card-marker"
+      "oab-card-marker",
+      {
+        "data-oab-card-ordinal": String(card.ordinal),
+        "aria-label": "Open this card in Anki",
+        role: "button",
+        tabindex: "0"
+      }
     );
   }
   for (const match of source.matchAll(/%%oab:(?:basic|reverse|list|dump|image|cloze|end):v1%%/g)) {
@@ -205,9 +253,10 @@ function addMark(
   target: Array<{ from: number; to: number; decoration: Decoration }>,
   from: number,
   to: number,
-  className: string
+  className: string,
+  attributes?: Record<string, string>
 ): void {
   if (to > from) {
-    target.push({ from, to, decoration: Decoration.mark({ class: className }) });
+    target.push({ from, to, decoration: Decoration.mark({ class: className, attributes }) });
   }
 }

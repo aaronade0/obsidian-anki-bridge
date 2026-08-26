@@ -9,7 +9,6 @@ export class BridgeSettingTab extends PluginSettingTab {
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
-    containerEl.createEl("h2", { text: "Obsidian Anki Bridge" });
     containerEl.createEl("p", {
       text: "Creates and updates Anki cards in the background without writing generated IDs into notes. Removed cards are deleted only after explicit confirmation."
     });

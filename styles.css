@@ -24,6 +24,17 @@
   padding: 0 0.16em;
 }
 
+.oab-card-marker[data-oab-card-ordinal] {
+  cursor: pointer;
+}
+
+.oab-card-marker[data-oab-card-ordinal]:hover,
+.oab-card-marker[data-oab-card-ordinal]:focus {
+  filter: brightness(1.15);
+  outline: 2px solid color-mix(in srgb, var(--interactive-accent) 55%, transparent);
+  outline-offset: 2px;
+}
+
 .oab-status {
   cursor: pointer;
 }
@@ -63,8 +74,27 @@
   white-space: pre-wrap;
 }
 
-.oab-conflict button {
+.oab-conflict > button {
   margin-top: 0.8rem;
+}
+
+.oab-conflict-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.7rem;
+  margin-top: 0.8rem;
+}
+
+.oab-path-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin: 0.9rem 0;
+}
+
+.oab-path-input {
+  box-sizing: border-box;
+  width: 100%;
 }
 
 .oab-modal-actions {

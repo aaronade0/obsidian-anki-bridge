@@ -1,6 +1,6 @@
 # Architecture
 
-Obsidian Anki Bridge is split into deterministic core modules and an I/O shell.
+Anki Bridge is split into deterministic core modules and an I/O shell.
 The split keeps a later remote transport from changing card syntax, identity,
 or reconciliation rules.
 
@@ -88,11 +88,22 @@ Reconciliation uses:
 1. exact normalized-content fingerprints;
 2. card type plus nearest relative position for edits inside one known file;
 3. exact file-content hashes for files moved outside Obsidian.
+4. a unique exact card fingerprint, plus live confirmation that the card is no
+   longer present at its old path, for cards cut between existing notes.
+
+Copying is distinguishable because the original fingerprint remains present at
+its source. Repeated identical cards, simultaneous edit-and-move operations,
+and other ambiguous cases never use cross-file identity inference.
 
 Ambiguous moves are reported and never guessed. Removed cards and list items
 are quarantined in the registry. Their Anki notes are deleted only after an
 individual confirmation in Obsidian; the bridge rechecks ownership immediately
 before deletion and verifies the result before removing the registry entry.
+An externally missing whole note can also be resolved explicitly: a verified
+batch confirmation deletes every bridge-owned Anki note from that file, while
+manual relinking to an existing unclaimed Markdown path preserves all bridge
+IDs and review history. Both paths recheck the current registry and filesystem
+state immediately before applying the requested resolution.
 
 Obsidian's public `FileManager.trashFile` operation is wrapped while the plugin
 is loaded so the subsequent Vault deletion event can be attributed to an
@@ -152,9 +163,9 @@ succeeds. Connection failures leave it queued for retry.
 
 An explicit mobile whole-note deletion is represented by a tombstone event.
 This lets the desktop distinguish it from an unobserved filesystem disappearance
-and create the normal per-card pending deletions. A deletion confirmed on
-mobile is another queued operation; the desktop repeats every ownership and
-missing-state check immediately before touching Anki.
+and create the normal per-card pending deletions. A card or whole-file deletion
+confirmed on mobile is another queued operation; the desktop repeats every
+ownership and missing-state check immediately before touching Anki.
 
 Rendering remains a desktop responsibility. This prevents a mobile device
 without a particular visual plugin from degrading a previously valid Anki

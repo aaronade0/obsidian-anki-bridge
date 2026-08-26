@@ -4,7 +4,8 @@ export type MobileOutboxEvent =
   | MobileUpsertEvent
   | MobileRenameEvent
   | MobileDeleteEvent
-  | MobileConfirmedDeletionEvent;
+  | MobileConfirmedDeletionEvent
+  | MobileConfirmedFileDeletionEvent;
 
 interface MobileOutboxEventBase {
   schemaVersion: 1;
@@ -35,6 +36,13 @@ export interface MobileConfirmedDeletionEvent extends MobileOutboxEventBase {
   cardKey: string;
 }
 
+export interface MobileConfirmedFileDeletionEvent extends MobileOutboxEventBase {
+  type: "confirm-delete-file";
+  conflictKey: string;
+  fileKey: string;
+  path: string;
+}
+
 export interface StoredMobileOutboxEvent {
   event: MobileOutboxEvent;
   storagePath: string;
@@ -58,7 +66,8 @@ type NewMobileOutboxEvent =
   | { type: "upsert"; path: string }
   | { type: "rename"; oldPath: string; path: string }
   | { type: "delete"; path: string }
-  | { type: "confirm-delete"; conflictKey: string; cardKey: string };
+  | { type: "confirm-delete"; conflictKey: string; cardKey: string }
+  | { type: "confirm-delete-file"; conflictKey: string; fileKey: string; path: string };
 
 export class MobileOutbox {
   constructor(
@@ -142,6 +151,9 @@ function supersededBy(input: NewMobileOutboxEvent, existing: MobileOutboxEvent):
   if (input.type === "confirm-delete") {
     return existing.type === "confirm-delete" && existing.conflictKey === input.conflictKey;
   }
+  if (input.type === "confirm-delete-file") {
+    return existing.type === "confirm-delete-file" && existing.fileKey === input.fileKey;
+  }
   if (input.type === "upsert") {
     return existing.type === "upsert" && existing.path === input.path;
   }
@@ -169,6 +181,9 @@ function isMobileOutboxEvent(value: unknown): value is MobileOutboxEvent {
   }
   if (value.type === "confirm-delete") {
     return nonEmptyString(value.conflictKey) && nonEmptyString(value.cardKey);
+  }
+  if (value.type === "confirm-delete-file") {
+    return nonEmptyString(value.conflictKey) && nonEmptyString(value.fileKey) && validMarkdownPath(value.path);
   }
   return false;
 }

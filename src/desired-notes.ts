@@ -35,7 +35,7 @@ export async function buildDesiredNotes(
     if (!registry) {
       continue;
     }
-    const context = sourceContext(sourcePath, parsed.headingPath);
+    const context = sourceContext(sourcePath, parsed.headingPath, parsed.listContext);
     const priorityTags = parsed.priority ? [`prio${parsed.priority}`, `oab-prio${parsed.priority}`] : [];
 
     if (parsed.kind === "cloze") {
@@ -43,7 +43,8 @@ export async function buildDesiredNotes(
         context.folderPath,
         context.noteName,
         context.headingPath,
-        sourceHref(vaultName, registry.key)
+        sourceHref(vaultName, registry.key),
+        context.listContext
       );
       const rendered = await renderForAnki(
         app,
@@ -103,7 +104,8 @@ export async function buildDesiredNotes(
           context.folderPath,
           context.noteName,
           context.headingPath,
-          sourceHref(vaultName, child.key)
+          sourceHref(vaultName, child.key),
+          context.listContext
         );
         notes.push({
           cardKey: child.key,
@@ -148,7 +150,8 @@ export async function buildDesiredNotes(
       context.folderPath,
       context.noteName,
       context.headingPath,
-      sourceHref(vaultName, registry.key)
+      sourceHref(vaultName, registry.key),
+      context.listContext
     );
     warnings.push(
       ...[...renderedFront.warnings, ...renderedBack.warnings].map((message) => ({ cardKey: registry.key, message }))

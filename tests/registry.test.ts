@@ -74,4 +74,25 @@ describe("registry reconciliation", () => {
     expect(restored.missingCards).toEqual([]);
     expect(restored.file.missingReason).toBeUndefined();
   });
+
+  it("relocates a uniquely verified cut card with its key and Anki note ID", () => {
+    const files: RegistryFile[] = [];
+    const cards: RegistryCard[] = [];
+    const source = "Question ⇢%%oab:basic:v1%%Answer";
+    const original = reconcileFile("Old.md", source, parser.parse(source), files, cards, 1);
+    const moved = original.activeCards[0];
+    expect(moved).toBeDefined();
+    if (!moved) return;
+    moved.ankiNoteId = 123456;
+    reconcileFile("Old.md", "No cards here", [], files, cards, 2);
+
+    const target = reconcileFile("New.md", source, parser.parse(source), files, cards, 3, [moved]);
+
+    expect(target.activeCards[0]).toBe(moved);
+    expect(target.activeCards[0]?.sourcePath).toBe("New.md");
+    expect(target.activeCards[0]?.fileKey).toBe(target.file.key);
+    expect(target.activeCards[0]?.ankiNoteId).toBe(123456);
+    expect(target.relocatedCards).toEqual([{ card: moved, oldPath: "Old.md" }]);
+    expect(cards).toHaveLength(1);
+  });
 });
