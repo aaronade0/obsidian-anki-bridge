@@ -585,6 +585,9 @@ const result = await command("Runtime.evaluate", {
       "    - Indented question ⇢%%oab:basic:v1%%Indented answer",
       "Nested prompts ⇢[%%oab:list:v1%%",
       "- Nested prompt ⇢%%oab:basic:v1%%Nested answer",
+      "- The capital is ⟦%%oab:cloze:v1%%Berlin⟧%%oab:end:v1%%.",
+      "- Energy facts",
+      "  Energy is measured in ⟦%%oab:cloze:v1%%joules⟧%%oab:end:v1%%.",
       "- Plain list answer",
       "]⇠%%oab:end:v1%%"
     ].join("\\n");
@@ -594,17 +597,27 @@ const result = await command("Runtime.evaluate", {
     const indentedCard = nestedRegistry.find((card) => card.preview === "Indented question");
     const nestedBasicCard = nestedRegistry.find((card) => card.preview === "Nested prompt");
     const nestedListCard = nestedRegistry.find((card) => card.kind === "list");
+    const nestedClozeCards = nestedRegistry.filter((card) => card.kind === "cloze");
     const indentedNote = indentedCard?.ankiNoteId
       ? await plugin.client().noteInfo(indentedCard.ankiNoteId)
       : undefined;
     const nestedBasicNote = nestedBasicCard?.ankiNoteId
       ? await plugin.client().noteInfo(nestedBasicCard.ankiNoteId)
       : undefined;
-    const nestedCardsCreated = nestedSummary?.desiredNotes === 4 &&
-      nestedRegistry.length === 3 && nestedListCard?.children.filter((child) => child.status === "active").length === 2 &&
+    const nestedClozeNotes = [];
+    for (const card of nestedClozeCards) {
+      if (card.ankiNoteId) nestedClozeNotes.push(await plugin.client().noteInfo(card.ankiNoteId));
+    }
+    const nestedCardsCreated = nestedSummary?.desiredNotes === 8 &&
+      nestedRegistry.length === 5 && nestedListCard?.children.filter((child) => child.status === "active").length === 4 &&
       nestedBasicNote?.fields?.Front?.value?.includes("Nested prompt") &&
       nestedBasicNote?.fields?.Back?.value?.includes("Nested answer") &&
       !nestedListCard?.children.some((child) => child.preview?.includes("Nested answer"));
+    const nestedClozeCardsCreated = nestedClozeNotes.length === 2 &&
+      nestedClozeNotes.every((note) => note?.modelName === "Obsidian Flashcards - Cloze v1") &&
+      nestedClozeNotes.some((note) => note?.fields?.Text?.value?.includes("{{c1::Berlin}}")) &&
+      nestedClozeNotes.some((note) => note?.fields?.Text?.value?.includes("{{c1::joules}}")) &&
+      nestedClozeNotes.every((note) => !note?.fields?.Text?.value?.includes("{{c0::"));
     const indentationContextRendered = indentedCard?.listContext?.join(" > ") === "Parent item > Child item" &&
       indentedNote?.fields?.Context?.value?.includes('class="list-context"') &&
       indentedNote.fields.Context.value.includes("Parent item") &&
@@ -739,6 +752,7 @@ const result = await command("Runtime.evaluate", {
       mobileOutboxDrained,
       externalFileScanRecovered,
       nestedCardsCreated,
+      nestedClozeCardsCreated,
       indentationContextRendered,
       nestedWarningAbsent,
       markerClickOpenedCorrectCard,
@@ -812,6 +826,81 @@ value.shortcutExpansion = shortcutResult.result?.value?.expanded === true;
 value.shortcutBack = shortcutResult.result?.value?.parsedBack;
 value.shortcutTail = shortcutResult.result?.value?.tail;
 value.shortcutDebug = shortcutResult.exceptionDetails?.exception?.description ?? shortcutResult.result?.description;
+const directShortcutResult = await command("Runtime.evaluate", {
+  expression: `(async () => {
+    const editor = globalThis.app.workspace.activeLeaf?.view?.editor;
+    const codeMirror = editor?.cm;
+    const file = globalThis.app.vault.getAbstractFileByPath(${JSON.stringify(shortcutState.path)});
+    if (!editor || !codeMirror?.contentDOM || !file) throw new Error("No active CodeMirror editor for direct shortcut tests.");
+    const original = ${JSON.stringify(shortcutState.original)};
+    const pressTab = () => !codeMirror.contentDOM.dispatchEvent(new KeyboardEvent("keydown", {
+      key: "Tab",
+      code: "Tab",
+      keyCode: 9,
+      which: 9,
+      bubbles: true,
+      cancelable: true
+    }));
+    const cases = [
+      { name: "reverse", suffix: "><", cursorBack: 0, content: "Definition", kind: "reverse" },
+      { name: "list", suffix: ">[]", cursorBack: 1, content: "List item", kind: "list" },
+      { name: "dump", suffix: ">{}", cursorBack: 1, content: "Long answer", kind: "dump" },
+      { name: "image", suffix: ">!", cursorBack: 0, content: "![[diagram.png]]", kind: "image-occlusion" }
+    ];
+    const results = [];
+    for (const candidate of cases) {
+      const source = original + "\\nShortcut " + candidate.suffix;
+      editor.setValue(source);
+      editor.setCursor(editor.offsetToPos(source.length - candidate.cursorBack));
+      editor.focus();
+      const tabPrevented = pressTab();
+      editor.replaceSelection(candidate.content);
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      const parsed = globalThis.app.plugins.plugins["anki-bridge"].parser.parse(editor.getValue()).at(-1);
+      results.push({
+        name: candidate.name,
+        tabPrevented,
+        parsedKind: parsed?.kind,
+        expectedKind: candidate.kind,
+        noAutoCloserLeft: candidate.cursorBack === 0 ||
+          !editor.getValue().includes(candidate.suffix + candidate.suffix.at(-1))
+      });
+    }
+
+    const clozeSource = original + "\\nThe capital is []";
+    editor.setValue(clozeSource);
+    editor.setCursor(editor.offsetToPos(clozeSource.length - 1));
+    editor.focus();
+    const clozeTabPrevented = pressTab();
+    editor.replaceSelection("Berlin");
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const beforeMove = codeMirror.state.selection.main.head;
+    const moved = codeMirror.moveByChar(codeMirror.state.selection.main, true);
+    codeMirror.dispatch({ selection: { anchor: moved.head } });
+    editor.replaceSelection(" aaron");
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const clozeValue = editor.getValue();
+    const clozeParsed = globalThis.app.plugins.plugins["anki-bridge"].parser.parse(clozeValue).at(-1);
+    const closeMarker = "⟧%%oab:end:v1%%";
+    const closeEnd = clozeValue.indexOf(closeMarker, clozeValue.lastIndexOf("The capital is")) + closeMarker.length;
+    const cloze = {
+      tabPrevented: clozeTabPrevented,
+      parsedKind: clozeParsed?.kind,
+      parsedFront: clozeParsed?.front,
+      cursorSkippedMarker: moved.head > beforeMove && moved.head === closeEnd,
+      continuedInOrder: clozeValue.endsWith(closeMarker + " aaron"),
+      noExtraCloser: !clozeValue.endsWith(closeMarker + "] aaron")
+    };
+    editor.setValue(original);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    await globalThis.app.vault.modify(file, original);
+    return { cases: results, cloze };
+  })()`,
+  awaitPromise: true,
+  returnByValue: true
+});
+value.directShortcuts = directShortcutResult.result?.value;
+value.directShortcutsDebug = directShortcutResult.exceptionDetails?.exception?.description ?? directShortcutResult.result?.description;
 const touchPickerResult = await command("Runtime.evaluate", {
   expression: `(async () => {
     const editor = globalThis.app.workspace.activeLeaf?.view?.editor;
@@ -879,11 +968,19 @@ if (!value?.pluginLoaded || value.summary?.desiredNotes !== 7 || value.noteIds?.
     !value.mobileOutboxCreated || !value.mobileOutboxUpdated || !value.sharedStateAvailable ||
     !value.sharedOutboxUsed || !value.legacyOutboxMigrated || !value.mobileDeleteQuarantined ||
     !value.mobileConfirmedDeletionApplied || !value.mobileOutboxDrained ||
-    !value.externalFileScanRecovered || !value.nestedCardsCreated ||
+    !value.externalFileScanRecovered || !value.nestedCardsCreated || !value.nestedClozeCardsCreated ||
     !value.indentationContextRendered || !value.nestedWarningAbsent ||
     !value.markerClickOpenedCorrectCard || !value.cursorCommandRemoved ||
     !value.cutPreservedIdentity || !value.copyCreatedNewIdentity ||
     !value.shortcutExpansion || value.shortcutBack !== "Answer" ||
+    value.directShortcuts?.cases?.length !== 4 ||
+    !value.directShortcuts.cases.every((entry) => entry.tabPrevented &&
+      entry.parsedKind === entry.expectedKind && entry.noAutoCloserLeft) ||
+    !value.directShortcuts?.cloze?.tabPrevented ||
+    value.directShortcuts.cloze.parsedKind !== "cloze" ||
+    value.directShortcuts.cloze.parsedFront !== "The capital is {{c1::Berlin}} aaron" ||
+    !value.directShortcuts.cloze.cursorSkippedMarker ||
+    !value.directShortcuts.cloze.continuedInOrder || !value.directShortcuts.cloze.noExtraCloser ||
     !value.touchPicker?.commandRegistered || !value.touchPicker.commandHasIcon ||
     !value.touchPicker.ribbonVisible || !value.touchPicker.executed ||
     !value.touchPicker.pickerVisible || value.touchPicker.choiceCount !== 6 ||

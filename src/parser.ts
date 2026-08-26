@@ -306,11 +306,11 @@ function parseInlineCard(
     }
   }
 
-  const clozeMatches = [...content.text.matchAll(/⟦%%oab:cloze:v1%%([^\]\n]+)⟧%%oab:end:v1%%/g)];
+  const priorityResult = stripPriority(content.text);
+  const clozeMatches = [...priorityResult.value.matchAll(/⟦%%oab:cloze:v1%%([^\]\n]+)⟧%%oab:end:v1%%/g)];
   if (clozeMatches.length === 0) {
     return undefined;
   }
-  const priorityResult = stripPriority(content.text);
   const clozeText = priorityResult.value.replace(
     /⟦%%oab:cloze:v1%%([^\]\n]+)⟧%%oab:end:v1%%/g,
     (_match, answer: string, offset: number) => {
@@ -318,8 +318,7 @@ function parseInlineCard(
       return `{{c${clozeNumber}::${answer.trim()}}}`;
     }
   );
-  const firstMatch = clozeMatches[0];
-  const markerFrom = content.from + (firstMatch?.index ?? 0);
+  const markerFrom = content.from + content.text.indexOf(CLOZE_OPEN_MARKER);
   return makeCard({
     ordinal,
     kind: "cloze",
@@ -355,9 +354,6 @@ function parseNestedInlineListCards(
       continue;
     }
     const content = cardLineContent(line);
-    if (!content.isListItem) {
-      continue;
-    }
     const card = parseInlineCard(
       line,
       content,

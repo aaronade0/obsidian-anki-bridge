@@ -12,20 +12,15 @@ are open. No server, mobile Anki API, or additional account is required.
 
 ## Installation
 
-The plugin has been submitted to Obsidian's Community Plugins directory. Until
-the listing becomes installable after review, install the current GitHub
-release manually:
+Install **Anki Bridge** directly from Obsidian's official Community Plugins
+directory:
 
-1. Download `anki-bridge-<version>.zip` from the
-   [latest release](https://github.com/aaronade0/obsidian-anki-bridge/releases/latest).
-2. Extract the contained `anki-bridge` folder into
-   `<vault>/.obsidian/plugins/`.
-3. Reload Obsidian, open **Settings → Community plugins**, and enable
-   **Anki Bridge**.
-4. On the desktop, install
+1. Open **Settings → Community plugins → Browse**.
+2. Search for **Anki Bridge**, select **Install**, then **Enable**.
+3. On the desktop, install
    [AnkiConnect](https://ankiweb.net/shared/info/2055492159), start Anki, and use
    **Test connection** in the bridge settings.
-5. To create or edit cards on a phone or tablet, synchronize the complete vault
+4. To create or edit cards on a phone or tablet, synchronize the complete vault
    including `.obsidian/plugins/anki-bridge`. No mobile connection
    setup is needed.
 
@@ -67,6 +62,23 @@ synchronization.
 Desktop users can also type a single `>` and press `Tab` to open the same card
 picker. Every template remains available individually through the command
 palette.
+
+For direct desktop insertion, the following shortcuts avoid opening the
+picker. Type the characters and then press `Tab`:
+
+| Shortcut | Card format |
+| --- | --- |
+| `>>` + `Tab` | Basic |
+| `><` + `Tab` | Reversible |
+| `>[` + `Tab` | List |
+| `>{` + `Tab` | Dump |
+| `>!` + `Tab` | Image Occlusion |
+| `[` + `Tab` | Cloze |
+
+If Obsidian automatically adds `]` or `}`, leave the cursor inside the pair and
+press `Tab` normally. The bridge consumes the auto-added closer instead of
+leaving a duplicate character behind. The same works when the cursor is just
+after the complete pair.
 
 The complete guide can also be opened inside Obsidian in three ways:
 
@@ -154,6 +166,10 @@ The capital is ⟦%%oab:cloze:v1%%Berlin⟧%%oab:end:v1%%.
 
 Select text and run **Mark selection as cloze deletion**. Multiple marked
 parts on the same line become independently numbered clozes in one Anki note.
+On desktop, type `[` and press `Tab` to insert an empty Cloze marker, enter the
+hidden text, then press the right arrow once to continue after the deletion.
+The marker is treated as one cursor step, so text after it remains in normal
+order.
 
 ### List card
 
@@ -179,8 +195,15 @@ not exposed on the outer List card:
 Name the quantities ⇢[%%oab:list:v1%%
 - Velocity ⇢%%oab:basic:v1%%Change of position per time
 - Momentum ⇄%%oab:reverse:v1%%Mass times velocity
+- The SI unit of energy is ⟦%%oab:cloze:v1%%joule⟧%%oab:end:v1%%.
+- Energy facts
+  A kilowatt-hour equals ⟦%%oab:cloze:v1%%3.6 megajoules⟧%%oab:end:v1%%.
 ]⇠%%oab:end:v1%%
 ```
+
+Cloze cards work both directly on a List item and on an indented continuation
+line belonging to that item. They use their own Anki Cloze note and scheduling,
+while the surrounding List card keeps its independently scheduled item notes.
 
 Nested List and Dump blocks are intentionally rejected because their closing
 markers would be ambiguous. Use an inline nested card or place the inner block

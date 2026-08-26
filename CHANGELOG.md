@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.1.0 - Direct shortcuts and reliable nested Cloze editing
+
+- Added direct `Tab` shortcuts for every card format: `>>` for Basic, `><` for
+  Reversible, `>[` for List, `>{` for Dump, `>!` for Image Occlusion, and `[`
+  for Cloze.
+- Consumed Obsidian's automatically inserted `]` and `}` whether the cursor is
+  inside or just after the pair, preventing duplicate closing characters.
+- Made complete visible-plus-hidden card markers atomic CodeMirror ranges so
+  arrow-key navigation cannot stop inside a hidden marker and make subsequent
+  text appear in reverse order.
+- Fixed nested Cloze numbering on indented continuation lines inside List
+  cards, where trimmed indentation could previously produce invalid `c0`
+  deletions instead of `c1`.
+- Added parser and full Obsidian/Anki regression coverage for Cloze cards both
+  directly on List items and on indented continuation lines.
+
 ## 1.0.1 - Community directory review fixes
 
 - Replaced direct capture-element style assignments with Obsidian's

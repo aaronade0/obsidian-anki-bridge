@@ -18,6 +18,8 @@ import {
 } from "./card-templates";
 import { FlashcardParser } from "./parser";
 import { findTypedDoubleChevronTrigger } from "./mobile-editor-trigger";
+import { findCardTemplateShortcut } from "./editor-shortcuts";
+import { findCanonicalEditorMarkerRanges } from "./editor-markers";
 
 export function openCardTypeModal(app: App, editor: Editor): void {
   new CardTypeModal(app, (choice) => insertCardTemplate(editor, choice)).open();
@@ -35,18 +37,28 @@ export function createEditorExtensions(
   const decorations = ViewPlugin.fromClass(
     class {
       decorations: DecorationSet;
+      atomicRanges: DecorationSet;
 
       constructor(view: EditorView) {
-        this.decorations = buildDecorations(view, parser);
+        const built = buildDecorations(view, parser);
+        this.decorations = built.decorations;
+        this.atomicRanges = built.atomicRanges;
       }
 
       update(update: ViewUpdate): void {
         if (update.docChanged || update.viewportChanged) {
-          this.decorations = buildDecorations(update.view, parser);
+          const built = buildDecorations(update.view, parser);
+          this.decorations = built.decorations;
+          this.atomicRanges = built.atomicRanges;
         }
       }
     },
-    { decorations: (instance) => instance.decorations }
+    {
+      decorations: (instance) => instance.decorations,
+      provide: (plugin) => EditorView.atomicRanges.of(
+        (view) => view.plugin(plugin)?.atomicRanges ?? Decoration.none
+      )
+    }
   );
 
   const templateKeymap = keymap.of([
@@ -58,11 +70,14 @@ export function createEditorExtensions(
           return false;
         }
         const head = selection.head;
-        if (head >= 2 && view.state.doc.sliceString(head - 2, head) === ">>") {
-          const inserted = resolveCardTemplate(cardTemplateChoice("basic"), "").replacement;
+        const shortcut = findCardTemplateShortcut(view.state.doc.toString(), head);
+        if (shortcut) {
+          const resolved = resolveCardTemplate(cardTemplateChoice(shortcut.id), "");
+          const finalHead = shortcut.from + resolved.replacement.length - resolved.cursorBack;
           view.dispatch({
-            changes: { from: head - 2, to: head, insert: inserted },
-            selection: { anchor: head - 2 + inserted.length }
+            changes: { from: shortcut.from, to: shortcut.to, insert: resolved.replacement },
+            selection: { anchor: finalHead },
+            scrollIntoView: true
           });
           return true;
         }
@@ -205,10 +220,14 @@ class CardTypeModal extends FuzzySuggestModal<CardTemplateChoice> {
   }
 }
 
-function buildDecorations(view: EditorView, parser: FlashcardParser): DecorationSet {
+function buildDecorations(
+  view: EditorView,
+  parser: FlashcardParser
+): { decorations: DecorationSet; atomicRanges: DecorationSet } {
   const source = view.state.doc.toString();
   const parsed = parser.parse(source);
   const ranges: Array<{ from: number; to: number; decoration: Decoration }> = [];
+  const atomicRanges: Array<{ from: number; to: number; decoration: Decoration }> = [];
   for (const card of parsed) {
     addMark(ranges, card.ranges.front.from, card.ranges.front.to, "oab-card-field oab-card-front");
     if (card.ranges.back && (card.ranges.items?.length ?? 0) === 0) {
@@ -231,14 +250,24 @@ function buildDecorations(view: EditorView, parser: FlashcardParser): Decoration
       }
     );
   }
-  for (const match of source.matchAll(/%%oab:(?:basic|reverse|list|dump|image|cloze|end):v1%%/g)) {
-    const from = match.index;
-    const to = from + match[0].length;
-    ranges.push({ from, to, decoration: Decoration.replace({}) });
-    if (source.slice(Math.max(0, from - 2), from) === "]⇠" || source.slice(Math.max(0, from - 2), from) === "}⇠") {
-      addMark(ranges, from - 2, from, "oab-card-marker oab-card-end-marker");
-    } else if (source.slice(Math.max(0, from - 1), from) === "⟧") {
-      addMark(ranges, from - 1, from, "oab-card-marker oab-card-end-marker");
+  for (const marker of findCanonicalEditorMarkerRanges(source)) {
+    ranges.push({
+      from: marker.hiddenFrom,
+      to: marker.hiddenTo,
+      decoration: Decoration.replace({})
+    });
+    atomicRanges.push({
+      from: marker.atomicFrom,
+      to: marker.atomicTo,
+      decoration: Decoration.mark({})
+    });
+    if (marker.isEndMarker) {
+      addMark(
+        ranges,
+        marker.visibleFrom,
+        marker.visibleTo,
+        "oab-card-marker oab-card-end-marker"
+      );
     }
   }
   ranges.sort((left, right) => left.from - right.from || left.to - right.to);
@@ -246,7 +275,12 @@ function buildDecorations(view: EditorView, parser: FlashcardParser): Decoration
   for (const range of ranges) {
     builder.add(range.from, range.to, range.decoration);
   }
-  return builder.finish();
+  atomicRanges.sort((left, right) => left.from - right.from || left.to - right.to);
+  const atomicBuilder = new RangeSetBuilder<Decoration>();
+  for (const range of atomicRanges) {
+    atomicBuilder.add(range.from, range.to, range.decoration);
+  }
+  return { decorations: builder.finish(), atomicRanges: atomicBuilder.finish() };
 }
 
 function addMark(

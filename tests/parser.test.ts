@@ -76,6 +76,27 @@ describe("FlashcardParser", () => {
     });
   });
 
+  it("creates Cloze cards from top-level List items and continuation lines", () => {
+    const source = [
+      "Complete the statements ⇢[%%oab:list:v1%%",
+      "- The capital is ⟦%%oab:cloze:v1%%Berlin⟧%%oab:end:v1%%.",
+      "- Energy facts",
+      "  Energy is measured in ⟦%%oab:cloze:v1%%joules⟧%%oab:end:v1%%.",
+      "]⇠%%oab:end:v1%%"
+    ].join("\n");
+    const cards = parser.parse(source);
+
+    expect(cards.map((card) => card.kind)).toEqual(["list", "cloze", "cloze"]);
+    expect(cards[1]).toMatchObject({
+      front: "The capital is {{c1::Berlin}}.",
+      listContext: []
+    });
+    expect(cards[2]).toMatchObject({
+      front: "Energy is measured in {{c1::joules}}.",
+      listContext: ["Energy facts"]
+    });
+  });
+
   it("uses ancestor list items as context for ordinary indented cards", () => {
     const source = [
       "# Physics",
