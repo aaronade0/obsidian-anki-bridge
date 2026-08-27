@@ -166,6 +166,22 @@ The capital is ⟦%%oab:cloze:v1%%Berlin⟧%%oab:end:v1%%.
 
 Select text and run **Mark selection as cloze deletion**. Multiple marked
 parts on the same line become independently numbered clozes in one Anki note.
+Anki therefore creates one card per marked part: the current part is hidden,
+while the rest of the sentence remains visible.
+
+Markdown tables are supported as well. Each marked row becomes one Cloze note,
+while the bridge keeps and renders the whole contiguous table as its context.
+Markers in that row are numbered from left to right; marked cells in the other
+rows remain visible. Each review therefore hides only the currently tested
+cell without taking it out of the table:
+
+```markdown
+| Quantity | Symbol | Unit |
+| --- | --- | --- |
+| Velocity | ⟦%%oab:cloze:v1%%v⟧%%oab:end:v1%% | ⟦%%oab:cloze:v1%%m/s⟧%%oab:end:v1%% |
+| Acceleration | ⟦%%oab:cloze:v1%%a⟧%%oab:end:v1%% | ⟦%%oab:cloze:v1%%m/s²⟧%%oab:end:v1%% |
+```
+
 On desktop, type `[` and press `Tab` to insert an empty Cloze marker, enter the
 hidden text, then press the right arrow once to continue after the deletion.
 The marker is treated as one cursor step, so text after it remains in normal
@@ -289,6 +305,9 @@ corresponding priority tag in Anki. Tags added manually in Anki are preserved.
 The front of every Anki card shows its folder, source note, and heading
 context. The highlighted note name is the link. Selecting it opens the exact
 source note in Obsidian, scrolls to the card, and briefly highlights it.
+Headings and indented list ancestors are displayed as a compact hierarchy. The
+context closest to the card is largest and strongest; broader parent context
+becomes progressively quieter, so the most useful clue is visible first.
 
 In Obsidian, the visible card-type symbol itself is clickable. Selecting `⇢`,
 `⇄`, `⇢[`, `⇢{`, `⇢▣`, or `⟦` opens that card in Anki's browser through local

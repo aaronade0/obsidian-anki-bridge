@@ -8,7 +8,7 @@ describe("Anki source context", () => {
     const context = renderContext("School/Physics", "Motion", ["Mechanics"], href);
 
     expect(href).toBe("obsidian://anki-bridge?vault=My%20Vault&card=card_123");
-    expect(context).toContain('<span class="folder">School/Physics</span> / ');
+    expect(context).toContain('<span class="folder">School/Physics</span><span class="path-separator">/</span>');
     expect(context).toContain(
       '<a class="note" href="obsidian://anki-bridge?vault=My%20Vault&amp;card=card_123">Motion</a>'
     );
@@ -24,10 +24,24 @@ describe("Anki source context", () => {
       ["Forces & motion", "<unsafe>"]
     );
 
-    expect(context).toContain('<span class="list-context" style="--depth:0">');
+    expect(context).toContain('<span class="context-item list-context" style="--depth:1;--distance:1">');
+    expect(context).toContain('<span class="context-item list-context is-nearest" style="--depth:2;--distance:0">');
     expect(context).toContain("Forces &amp; motion");
     expect(context).toContain("&lt;unsafe&gt;");
     expect(context).not.toContain("<unsafe>");
+  });
+
+  it("emphasizes the context nearest to the card", () => {
+    const context = renderContext(
+      "Study",
+      "Physics",
+      ["Kinematics", "Velocity"],
+      sourceHref("My Vault", "card_123")
+    );
+
+    expect(context).toContain('class="context-item heading" style="--depth:0;--distance:1"');
+    expect(context).toContain('class="context-item heading is-nearest" style="--depth:1;--distance:0"');
+    expect(context.indexOf("Kinematics")).toBeLessThan(context.indexOf("Velocity"));
   });
 
   it("creates an Obsidian file link for embedded visuals", () => {

@@ -5,16 +5,38 @@ export function renderContext(
   href: string,
   listContext: string[] = []
 ): string {
-  const folder = folderPath ? `<span class="folder">${escapeHtml(folderPath)}</span> / ` : "";
-  const headingHtml = headings
-    .map((heading, index) => `<span class="heading" style="--depth:${index}">${escapeHtml(heading)}</span>`)
-    .join("");
-  const listHtml = listContext
-    .map((item, index) =>
-      `<span class="list-context" style="--depth:${index}"><span class="list-bullet">↳</span>${escapeHtml(item)}</span>`
-    )
-    .join("");
-  return `${folder}<a class="note" href="${escapeHtml(href)}">${escapeHtml(noteName)}</a>${headingHtml}${listHtml}`;
+  const folder = folderPath
+    ? `<span class="folder">${escapeHtml(folderPath)}</span><span class="path-separator">/</span>`
+    : "";
+  const totalContextItems = headings.length + listContext.length;
+  const headingHtml = headings.map((heading, index) => contextItem(
+    "heading",
+    heading,
+    index,
+    totalContextItems - index - 1,
+    "#"
+  )).join("");
+  const listHtml = listContext.map((item, index) => contextItem(
+    "list-context",
+    item,
+    headings.length + index,
+    totalContextItems - headings.length - index - 1,
+    "↳"
+  )).join("");
+  const tree = headingHtml || listHtml ? `<div class="context-tree">${headingHtml}${listHtml}</div>` : "";
+  return `<div class="source-location">${folder}<a class="note" href="${escapeHtml(href)}">${escapeHtml(noteName)}</a></div>${tree}`;
+}
+
+function contextItem(
+  kind: "heading" | "list-context",
+  value: string,
+  depth: number,
+  distance: number,
+  symbol: string
+): string {
+  const nearest = distance === 0 ? " is-nearest" : "";
+  const symbolClass = kind === "heading" ? "heading-symbol" : "list-bullet";
+  return `<span class="context-item ${kind}${nearest}" style="--depth:${depth};--distance:${distance}"><span class="context-symbol ${symbolClass}">${symbol}</span><span class="context-label">${escapeHtml(value)}</span></span>`;
 }
 
 export function sourceHref(vaultName: string, cardKey: string): string {

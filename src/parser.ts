@@ -71,6 +71,18 @@ export class FlashcardParser {
 
       updateHeadingPath(headings, line.text);
 
+      const clozeTableRow = parseClozeTableRow(
+        lines,
+        index,
+        cards.length,
+        headings,
+        listContexts
+      );
+      if (clozeTableRow) {
+        cards.push(clozeTableRow);
+        continue;
+      }
+
       const cardLine = cardLineContent(line);
 
       const listStart = cardLine.text.match(LIST_START_PATTERN);
@@ -307,12 +319,12 @@ function parseInlineCard(
   }
 
   const priorityResult = stripPriority(content.text);
-  const clozeMatches = [...priorityResult.value.matchAll(/⟦%%oab:cloze:v1%%([^\]\n]+)⟧%%oab:end:v1%%/g)];
+  const clozeMatches = [...priorityResult.value.matchAll(/⟦%%oab:cloze:v1%%([^\n]+?)⟧%%oab:end:v1%%/g)];
   if (clozeMatches.length === 0) {
     return undefined;
   }
   const clozeText = priorityResult.value.replace(
-    /⟦%%oab:cloze:v1%%([^\]\n]+)⟧%%oab:end:v1%%/g,
+    /⟦%%oab:cloze:v1%%([^\n]+?)⟧%%oab:end:v1%%/g,
     (_match, answer: string, offset: number) => {
       const clozeNumber = clozeMatches.findIndex((candidate) => candidate.index === offset) + 1;
       return `{{c${clozeNumber}::${answer.trim()}}}`;
@@ -335,6 +347,93 @@ function parseInlineCard(
   });
 }
 
+function parseClozeTableRow(
+  lines: SourceLine[],
+  index: number,
+  ordinal: number,
+  headings: string[],
+  listContexts: Map<number, string[]>
+): ParsedCard | undefined {
+  const current = lines[index];
+  if (!current || !current.text.includes(CLOZE_OPEN_MARKER) || !isTableRow(current.text)) {
+    return undefined;
+  }
+
+  let startIndex = index;
+  while (startIndex > 0 && isTableRow(lines[startIndex - 1]?.text ?? "")) {
+    startIndex -= 1;
+  }
+  let endIndex = index;
+  while (endIndex + 1 < lines.length && isTableRow(lines[endIndex + 1]?.text ?? "")) {
+    endIndex += 1;
+  }
+
+  const delimiterIndex = startIndex + 1;
+  if (index === delimiterIndex || !isTableDelimiter(lines[delimiterIndex]?.text ?? "")) {
+    return undefined;
+  }
+
+  const convertedCurrent = numberedClozeText(current.text);
+  if (!convertedCurrent) {
+    return undefined;
+  }
+
+  const tableText = lines.slice(startIndex, endIndex + 1)
+    .map((tableLine, relativeIndex) => {
+      const absoluteIndex = startIndex + relativeIndex;
+      return absoluteIndex === index ? convertedCurrent : revealClozeAnswers(tableLine.text);
+    })
+    .join("\n");
+  const firstMarkerFrom = current.from + current.text.indexOf(CLOZE_OPEN_MARKER);
+  return makeCard({
+    ordinal,
+    kind: "cloze",
+    front: tableText,
+    back: "",
+    items: [],
+    headings,
+    listContext: listContexts.get(current.number) ?? [],
+    start: current,
+    end: current,
+    marker: {
+      from: firstMarkerFrom,
+      to: firstMarkerFrom + CLOZE_OPEN_MARKER.length
+    },
+    frontRange: { from: current.from, to: current.to }
+  });
+}
+
+function isTableRow(value: string): boolean {
+  const trimmed = value.trim();
+  return trimmed.includes("|") && !FENCE_PATTERN.test(trimmed);
+}
+
+function isTableDelimiter(value: string): boolean {
+  const trimmed = value.trim().replace(/^\|/, "").replace(/\|$/, "");
+  const cells = trimmed.split("|").map((cell) => cell.trim());
+  return cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell));
+}
+
+function numberedClozeText(value: string): string | undefined {
+  const clozePattern = /⟦%%oab:cloze:v1%%([^\n]+?)⟧%%oab:end:v1%%/g;
+  const matches = [...value.matchAll(clozePattern)];
+  if (matches.length === 0) {
+    return undefined;
+  }
+  let clozeNumber = 0;
+  return value.replace(clozePattern, (_match, answer: string) => {
+    clozeNumber += 1;
+    return `{{c${clozeNumber}::${answer.trim()}}}`;
+  });
+}
+
+function revealClozeAnswers(value: string): string {
+  return value.replace(
+    /⟦%%oab:cloze:v1%%([^\n]+?)⟧%%oab:end:v1%%/g,
+    (_match, answer: string) => answer.trim()
+  );
+}
+
 function parseNestedInlineListCards(
   lines: SourceLine[],
   startingOrdinal: number,
@@ -343,7 +442,11 @@ function parseNestedInlineListCards(
 ): ParsedCard[] {
   const cards: ParsedCard[] = [];
   let fence: string | null = null;
-  for (const line of lines) {
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (!line) {
+      continue;
+    }
     const fenceMatch = line.text.match(FENCE_PATTERN);
     if (fenceMatch) {
       const marker = fenceMatch[1]?.[0];
@@ -351,6 +454,17 @@ function parseNestedInlineListCards(
       continue;
     }
     if (fence !== null) {
+      continue;
+    }
+    const clozeTableRow = parseClozeTableRow(
+      lines,
+      index,
+      startingOrdinal + cards.length,
+      headings,
+      listContexts
+    );
+    if (clozeTableRow) {
+      cards.push(clozeTableRow);
       continue;
     }
     const content = cardLineContent(line);
@@ -550,7 +664,7 @@ function sanitizeNestedInlineCards(value: string): string {
     }
   }
   sanitized = sanitized.replace(
-    /⟦%%oab:cloze:v1%%([^\]\n]+)⟧%%oab:end:v1%%/g,
+    /⟦%%oab:cloze:v1%%([^\n]+?)⟧%%oab:end:v1%%/g,
     (_match, answer: string) => answer.trim()
   );
   return stripPriority(sanitized).value.trimEnd();

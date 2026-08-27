@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import MarkdownIt from "markdown-it";
 import { FlashcardParser } from "../src/parser";
 
 const parser = new FlashcardParser();
@@ -95,6 +96,40 @@ describe("FlashcardParser", () => {
       front: "Energy is measured in {{c1::joules}}.",
       listContext: ["Energy facts"]
     });
+  });
+
+  it("numbers multiple Cloze deletions on one line independently", () => {
+    const [card] = parser.parse(
+      "Velocity is ⟦%%oab:cloze:v1%%distance⟧%%oab:end:v1%% divided by ⟦%%oab:cloze:v1%%time⟧%%oab:end:v1%%."
+    );
+
+    expect(card).toMatchObject({
+      kind: "cloze",
+      front: "Velocity is {{c1::distance}} divided by {{c2::time}}."
+    });
+  });
+
+  it("keeps the full Markdown table visible while independently testing each marked row", () => {
+    const source = [
+      "| Quantity | Symbol | Unit |",
+      "| --- | --- | --- |",
+      "| Velocity | ⟦%%oab:cloze:v1%%v⟧%%oab:end:v1%% | ⟦%%oab:cloze:v1%%m/s⟧%%oab:end:v1%% |",
+      "| Acceleration | ⟦%%oab:cloze:v1%%a⟧%%oab:end:v1%% | ⟦%%oab:cloze:v1%%m/s²⟧%%oab:end:v1%% |"
+    ].join("\n");
+    const cards = parser.parse(source);
+
+    expect(cards).toHaveLength(2);
+    expect(cards[0]).toMatchObject({ kind: "cloze", startLine: 2, endLine: 2 });
+    expect(cards[1]).toMatchObject({ kind: "cloze", startLine: 3, endLine: 3 });
+    expect(source.slice(cards[0]?.ranges.marker.from, cards[0]?.ranges.marker.to)).toBe("⟦%%oab:cloze:v1%%");
+    expect(cards[0]?.front).toContain("| Velocity | {{c1::v}} | {{c2::m/s}} |");
+    expect(cards[0]?.front).toContain("| Acceleration | a | m/s² |");
+    expect(cards[1]?.front).toContain("| Velocity | v | m/s |");
+    expect(cards[1]?.front).toContain("| Acceleration | {{c1::a}} | {{c2::m/s²}} |");
+    const rendered = new MarkdownIt().render(cards[0]?.front ?? "");
+    expect(rendered).toContain("<table>");
+    expect(rendered).toContain("<td>{{c1::v}}</td>");
+    expect(rendered).toContain("<td>{{c2::m/s}}</td>");
   });
 
   it("uses ancestor list items as context for ordinary indented cards", () => {

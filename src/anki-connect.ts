@@ -257,11 +257,19 @@ const CLOZE_TEMPLATES = [
 const CARD_CSS = `
 .card { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 20px; line-height: 1.5; color: #242424; background: #fff; padding: 24px; }
 .nightMode .card { color: #e8e8e8; background: #1e1e1e; }
-.oab-context { color: #777; font-size: .72em; margin-bottom: 1.2rem; }
-.oab-context .note { color: #7c3aed; font-size: 1.25em; font-weight: 600; }
-.oab-context .heading { display: block; margin-left: calc(var(--depth, 0) * .7rem); font-size: calc(1em - var(--depth, 0) * .04em); }
-.oab-context .list-context { display: block; margin-left: calc((var(--depth, 0) + 1) * .7rem); font-size: .96em; }
-.oab-context .list-bullet { display: inline-block; width: 1.1em; opacity: .72; }
+.oab-context { color: #6b7280; font-size: .72em; margin-bottom: 1.35rem; }
+.oab-context .source-location { display: flex; align-items: baseline; flex-wrap: wrap; gap: .35em; font-size: .92em; letter-spacing: .01em; }
+.oab-context .folder { opacity: .76; }
+.oab-context .path-separator { opacity: .42; }
+.oab-context .note { color: #7c3aed; font-size: 1.08em; font-weight: 650; }
+.oab-context .context-tree { margin-top: .62em; padding: .12em 0 .12em .72em; border-left: 2px solid rgba(124, 58, 237, .2); }
+.oab-context .context-item { display: flex; align-items: baseline; gap: .42em; margin-top: .28em; margin-left: calc(var(--depth, 0) * .62em); font-size: max(.9em, calc(1.3em - var(--distance, 0) * .1em)); line-height: 1.3; opacity: max(.68, calc(1 - var(--distance, 0) * .08)); }
+.oab-context .context-item.is-nearest { color: #4c1d95; font-weight: 700; }
+.nightMode .oab-context { color: #a1a1aa; }
+.nightMode .oab-context .context-tree { border-left-color: rgba(167, 139, 250, .34); }
+.nightMode .oab-context .context-item.is-nearest { color: #c4b5fd; }
+.oab-context .context-symbol { flex: 0 0 1.1em; color: #8b5cf6; font-weight: 700; text-align: center; opacity: .72; }
+.oab-context .context-label { min-width: 0; }
 main img, main video { display: block; max-width: 100%; height: auto; margin: .75rem auto; }
 main audio { width: 100%; }
 main figure { margin: 1rem 0; }
