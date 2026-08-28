@@ -327,7 +327,7 @@ function parseInlineCard(
     /⟦%%oab:cloze:v1%%([^\n]+?)⟧%%oab:end:v1%%/g,
     (_match, answer: string, offset: number) => {
       const clozeNumber = clozeMatches.findIndex((candidate) => candidate.index === offset) + 1;
-      return `{{c${clozeNumber}::${answer.trim()}}}`;
+      return ankiCloze(clozeNumber, answer);
     }
   );
   const markerFrom = content.from + content.text.indexOf(CLOZE_OPEN_MARKER);
@@ -423,8 +423,16 @@ function numberedClozeText(value: string): string | undefined {
   let clozeNumber = 0;
   return value.replace(clozePattern, (_match, answer: string) => {
     clozeNumber += 1;
-    return `{{c${clozeNumber}::${answer.trim()}}}`;
+    return ankiCloze(clozeNumber, answer);
   });
+}
+
+function ankiCloze(clozeNumber: number, answer: string): string {
+  // Anki treats every adjacent `}}` as the end of a cloze. TeX commonly
+  // creates that sequence when nested groups close (for example g^{2}} in
+  // \frac{g^{2}}{8 \pi G}). Whitespace is semantically inert in TeX and
+  // prevents the inner braces from prematurely terminating the deletion.
+  return `{{c${clozeNumber}::${answer.trim().replaceAll("}}", "} }")}}}`;
 }
 
 function revealClozeAnswers(value: string): string {

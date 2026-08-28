@@ -132,6 +132,19 @@ describe("FlashcardParser", () => {
     expect(rendered).toContain("<td>{{c2::m/s}}</td>");
   });
 
+  it("keeps nested TeX braces from prematurely closing an Anki cloze", () => {
+    const source = [
+      "| Energieform | Formel |",
+      "| --- | --- |",
+      "| gravitativ | ⟦%%oab:cloze:v1%%$E=\\frac{g^{2}}{8 \\pi G}$⟧%%oab:end:v1%% |"
+    ].join("\n");
+
+    const [card] = parser.parse(source);
+
+    expect(card?.front).toContain("{{c1::$E=\\frac{g^{2} }{8 \\pi G}$}}");
+    expect(card?.front.match(/}}/g)).toHaveLength(1);
+  });
+
   it("uses ancestor list items as context for ordinary indented cards", () => {
     const source = [
       "# Physics",

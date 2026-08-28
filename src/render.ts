@@ -1,6 +1,7 @@
 import MarkdownIt from "markdown-it";
 import { App, TFile } from "obsidian";
 import { stableHash } from "./hash";
+import { mathJaxForAnki, replaceObsidianMath } from "./math";
 import { escapeHtml, fileHref } from "./source-link";
 import { isVisualCodeLanguage, type RenderedVisual, type VisualRenderer } from "./visual-renderer";
 
@@ -114,6 +115,8 @@ export async function renderForAnki(
       match[1]
     ));
   });
+
+  prepared = replaceObsidianMath(prepared, (fragment) => inject(mathJaxForAnki(fragment)));
 
   for (const [key, raw] of protectedBlocks) {
     prepared = prepared.replaceAll(key, raw);

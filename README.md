@@ -182,6 +182,11 @@ cell without taking it out of the table:
 | Acceleration | ⟦%%oab:cloze:v1%%a⟧%%oab:end:v1%% | ⟦%%oab:cloze:v1%%m/s²⟧%%oab:end:v1%% |
 ```
 
+Obsidian LaTeX written with inline `$...$` or display `$$...$$` delimiters is
+converted to Anki's MathJax format. Formulas can be placed inside Cloze
+markers, including nested TeX groups such as fractions, without prematurely
+ending the deletion.
+
 On desktop, type `[` and press `Tab` to insert an empty Cloze marker, enter the
 hidden text, then press the right arrow once to continue after the deletion.
 The marker is treated as one cursor step, so text after it remains in normal
