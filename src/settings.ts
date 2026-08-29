@@ -1,5 +1,6 @@
 import { App, Platform, PluginSettingTab, Setting } from "obsidian";
 import type ObsidianAnkiBridge from "./main";
+import { parseFilterEntries } from "./source-filter";
 
 export class BridgeSettingTab extends PluginSettingTab {
   constructor(app: App, private readonly plugin: ObsidianAnkiBridge) {
@@ -104,6 +105,53 @@ export class BridgeSettingTab extends PluginSettingTab {
             await this.plugin.savePluginData();
           }
         }));
+
+    containerEl.createEl("h3", { text: "Source filters" });
+    containerEl.createEl("p", {
+      text: "Optional filters control which Markdown notes can create or update cards. Existing Anki cards are left unchanged when a source becomes excluded. Exclusions always override included folders."
+    });
+
+    new Setting(containerEl)
+      .setName("Excluded paths")
+      .setDesc("One vault-relative file or folder path per line. * and ? wildcards are supported. Example: Archive or Templates/*.md")
+      .addTextArea((text) => {
+        text.inputEl.rows = 4;
+        text
+          .setPlaceholder("Archive\nTemplates/*.md")
+          .setValue(this.plugin.bridgeSettings.excludedPaths.join("\n"))
+          .onChange(async (value) => {
+            this.plugin.bridgeSettings.excludedPaths = parseFilterEntries(value);
+            await this.plugin.savePluginData();
+          });
+      });
+
+    new Setting(containerEl)
+      .setName("Excluded filename patterns")
+      .setDesc("One case-insensitive pattern per line. Plain text matches anywhere in the filename; * and ? are wildcards. Examples: draft, _temp*, *.canvas.md")
+      .addTextArea((text) => {
+        text.inputEl.rows = 4;
+        text
+          .setPlaceholder("draft\n_temp*\n*.canvas.md")
+          .setValue(this.plugin.bridgeSettings.excludedFilenamePatterns.join("\n"))
+          .onChange(async (value) => {
+            this.plugin.bridgeSettings.excludedFilenamePatterns = parseFilterEntries(value);
+            await this.plugin.savePluginData();
+          });
+      });
+
+    new Setting(containerEl)
+      .setName("Included folders only")
+      .setDesc("Optional allowlist: one vault-relative folder per line. When set, only notes in these folders and their subfolders are synchronized. Leave empty for the previous all-vault behavior.")
+      .addTextArea((text) => {
+        text.inputEl.rows = 4;
+        text
+          .setPlaceholder("University/Physics\nStudy notes")
+          .setValue(this.plugin.bridgeSettings.includedFolders.join("\n"))
+          .onChange(async (value) => {
+            this.plugin.bridgeSettings.includedFolders = parseFilterEntries(value);
+            await this.plugin.savePluginData();
+          });
+      });
 
     new Setting(containerEl)
       .setName("Show success notices")

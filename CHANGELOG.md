@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.3.0 - Configurable source filters
+
+- Added non-destructive path and filename exclusions with case-insensitive
+  plain-text matching plus `*` and `?` wildcard patterns.
+- Added an optional included-folder allowlist so synchronization can be limited
+  to selected folder trees while the rest of the vault is ignored.
+- Applied the filters consistently to automatic, manual, full-vault, external-
+  change, and mobile-outbox synchronization. Existing Anki cards remain
+  unchanged when their source is excluded.
+- Kept all filter lists empty by default, preserving the previous all-vault
+  behavior after upgrading.
+
 ## 1.2.2 - Safe Markdown code examples
 
 - Ignored every canonical card marker inside Markdown inline code, matching the

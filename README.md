@@ -415,6 +415,28 @@ path-audit interval, success notifications, connection test, and the in-app
 guide. On mobile, the local connection fields are replaced by the current
 outbox count because no mobile connection configuration is required.
 
+### Source filters
+
+Source filters are optional. With all three fields empty, Anki Bridge keeps its
+previous behavior and considers Markdown notes throughout the vault.
+
+- **Excluded paths** accepts one vault-relative file or folder path per line.
+  A folder entry also excludes all descendants. `*` and `?` wildcards are
+  supported, for example `Archive`, `Templates/*.md`, or `Private/??.md`.
+- **Excluded filename patterns** accepts one case-insensitive pattern per
+  line. Plain text matches anywhere in the filename, so `draft` ignores both
+  `Draft.md` and `Chapter draft 2.md`. Wildcards can express prefixes or
+  suffixes, such as `_temp*` or `*.canvas.md`.
+- **Included folders only** is an optional allowlist. Once it contains an
+  entry, only Markdown notes in those vault-relative folders and their
+  subfolders can synchronize. For example, `University/Physics` allows that
+  folder tree while ignoring the rest of the vault.
+
+The allowlist and exclusions can be combined; exclusions always take
+precedence. Filtering is non-destructive: an ignored note creates and updates
+no cards, but cards that already exist in Anki are left unchanged rather than
+being treated as removed.
+
 ## Development
 
 ```bash

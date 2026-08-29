@@ -90,6 +90,9 @@ export interface PluginSettings {
   autoSyncDelayMs: number;
   pathAuditIntervalMinutes: number;
   showSuccessNotices: boolean;
+  excludedPaths: string[];
+  excludedFilenamePatterns: string[];
+  includedFolders: string[];
 }
 
 export interface PluginData {

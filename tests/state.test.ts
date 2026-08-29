@@ -10,7 +10,10 @@ const defaults: PluginSettings = {
   autoSync: true,
   autoSyncDelayMs: 1500,
   pathAuditIntervalMinutes: 30,
-  showSuccessNotices: false
+  showSuccessNotices: false,
+  excludedPaths: [],
+  excludedFilenamePatterns: [],
+  includedFolders: []
 };
 
 function partialData(deckRoot: string, key: string): Partial<PluginData> {

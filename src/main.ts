@@ -50,6 +50,7 @@ import type {
 } from "./types";
 import { ObsidianVisualRenderer } from "./visual-renderer";
 import { normalizeMarkdownPath } from "./vault-path";
+import { isSourcePathAllowed } from "./source-filter";
 import README_MARKDOWN from "../README.md";
 
 const DEFAULT_SETTINGS: PluginSettings = {
@@ -60,7 +61,10 @@ const DEFAULT_SETTINGS: PluginSettings = {
   autoSync: true,
   autoSyncDelayMs: 1500,
   pathAuditIntervalMinutes: 30,
-  showSuccessNotices: false
+  showSuccessNotices: false,
+  excludedPaths: [],
+  excludedFilenamePatterns: [],
+  includedFolders: []
 };
 
 const DEVICE_ID_STORAGE_KEY = "obsidian-anki-bridge-device-id";
@@ -446,6 +450,10 @@ export default class ObsidianAnkiBridge extends Plugin {
   }
 
   private scheduleSync(file: TFile): void {
+    if (!this.isSourceFileAllowed(file.path)) {
+      this.clearPendingSync(file.path);
+      return;
+    }
     const previous = this.pendingTimers.get(file.path);
     if (previous !== undefined) {
       window.clearTimeout(previous);
@@ -463,6 +471,12 @@ export default class ObsidianAnkiBridge extends Plugin {
 
   private async queueMobileUpsert(file: TFile, manual: boolean): Promise<void> {
     try {
+      if (!this.isSourceFileAllowed(file.path)) {
+        if (manual) {
+          new Notice("This note is excluded by the Anki Bridge source filters.");
+        }
+        return;
+      }
       const source = await this.app.vault.cachedRead(file);
       const registered = this.data.files.some((candidate) => candidate.path === file.path);
       if (!registered && !containsCanonicalMarker(source)) {
@@ -571,8 +585,10 @@ export default class ObsidianAnkiBridge extends Plugin {
     }
     const registeredPaths = new Set(this.data.files.map((file) => file.path));
     const files = fullScan
-      ? this.app.vault.getMarkdownFiles()
-      : this.app.vault.getMarkdownFiles().filter((file) => registeredPaths.has(file.path));
+      ? this.app.vault.getMarkdownFiles().filter((file) => this.isSourceFileAllowed(file.path))
+      : this.app.vault.getMarkdownFiles().filter((file) =>
+          registeredPaths.has(file.path) && this.isSourceFileAllowed(file.path)
+        );
     for (const file of files) {
       // File-sync clients can replace a note without emitting an Obsidian
       // modify event. `read` deliberately bypasses the cachedRead layer.
@@ -796,6 +812,9 @@ export default class ObsidianAnkiBridge extends Plugin {
     if (Platform.isMobile) {
       let queued = 0;
       for (const file of this.app.vault.getMarkdownFiles()) {
+        if (!this.isSourceFileAllowed(file.path)) {
+          continue;
+        }
         const registered = this.data.files.some((candidate) => candidate.path === file.path);
         const source = await this.app.vault.cachedRead(file);
         if (!registered && !containsCanonicalMarker(source)) {
@@ -815,6 +834,9 @@ export default class ObsidianAnkiBridge extends Plugin {
     let synced = 0;
     let failed = 0;
     for (const file of this.app.vault.getMarkdownFiles()) {
+      if (!this.isSourceFileAllowed(file.path)) {
+        continue;
+      }
       const registered = this.data.files.some((candidate) => candidate.path === file.path);
       const source = await this.app.vault.cachedRead(file);
       if (!registered && !containsCanonicalMarker(source)) {
@@ -832,6 +854,13 @@ export default class ObsidianAnkiBridge extends Plugin {
     manual: boolean,
     sourceOverride?: string
   ): Promise<SyncSummary | undefined> {
+    if (!this.isSourceFileAllowed(file.path)) {
+      this.clearPendingSync(file.path);
+      if (manual) {
+        new Notice("This note is excluded by the Anki Bridge source filters.");
+      }
+      return emptySummary(file.path);
+    }
     if (Platform.isMobile) {
       await this.queueMobileUpsert(file, manual);
       return emptySummary(file.path);
@@ -1122,6 +1151,10 @@ export default class ObsidianAnkiBridge extends Plugin {
     if (child) {
       child.ankiNoteId = noteId;
     }
+  }
+
+  private isSourceFileAllowed(path: string): boolean {
+    return isSourcePathAllowed(path, this.bridgeSettings);
   }
 
   private async handleRename(file: TFile, oldPath: string): Promise<void> {
