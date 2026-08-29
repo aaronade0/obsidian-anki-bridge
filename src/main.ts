@@ -26,7 +26,9 @@ import {
   DUMP_START_MARKER,
   FlashcardParser,
   LIST_END_MARKER,
-  LIST_START_MARKER
+  LIST_START_MARKER,
+  containsActiveCanonicalMarker,
+  maskMarkdownCode
 } from "./parser";
 import { moveRegistryFile, reconcileFile } from "./registry";
 import { noteBelongsToCardKey } from "./ownership";
@@ -1982,7 +1984,7 @@ function registryPreview(cards: RegistryCard[], cardKey: string): string | undef
 }
 
 function containsCanonicalMarker(source: string): boolean {
-  return source.includes("%%oab:");
+  return containsActiveCanonicalMarker(source);
 }
 
 function syntaxWarnings(
@@ -1990,10 +1992,11 @@ function syntaxWarnings(
   cards: ReturnType<FlashcardParser["parse"]>
 ): Array<{ code: string; message: string; cardKey?: string }> {
   const warnings: Array<{ code: string; message: string; cardKey?: string }> = [];
-  const listStarts = source.split("\n").filter((line) => line.includes(LIST_START_MARKER)).length;
-  const listEnds = source.split("\n").filter((line) => line.trimStart().startsWith(LIST_END_MARKER)).length;
-  const dumpStarts = source.split("\n").filter((line) => line.includes(DUMP_START_MARKER)).length;
-  const dumpEnds = source.split("\n").filter((line) => line.trimStart().startsWith(DUMP_END_MARKER)).length;
+  const activeSource = maskMarkdownCode(source);
+  const listStarts = activeSource.split("\n").filter((line) => line.includes(LIST_START_MARKER)).length;
+  const listEnds = activeSource.split("\n").filter((line) => line.trimStart().startsWith(LIST_END_MARKER)).length;
+  const dumpStarts = activeSource.split("\n").filter((line) => line.includes(DUMP_START_MARKER)).length;
+  const dumpEnds = activeSource.split("\n").filter((line) => line.trimStart().startsWith(DUMP_END_MARKER)).length;
   if (listStarts !== listEnds || dumpStarts !== dumpEnds) {
     warnings.push({
       code: "INVALID_BLOCK",

@@ -1,7 +1,7 @@
 {
   "id": "anki-bridge",
   "name": "Anki Bridge",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "minAppVersion": "1.8.7",
   "description": "Creates and syncs Anki flashcards from Markdown while preserving review history.",
   "author": "Aaron Ade and A.D.A.M.",

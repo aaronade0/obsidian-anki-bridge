@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.2.2 - Safe Markdown code examples
+
+- Ignored every canonical card marker inside Markdown inline code, matching the
+  existing behavior for fenced code blocks, so documentation and AI prompts do
+  not create accidental cards.
+- Excluded inline and fenced code from fast marker detection and structured-
+  block validation, preventing false `INVALID_BLOCK` conflicts and missing-
+  media warnings from documented examples.
+- Preserved inline code that appears in the front or back of a real card whose
+  marker is outside the code span.
+
 ## 1.1.0 - Direct shortcuts and reliable nested Cloze editing
 
 - Added direct `Tab` shortcuts for every card format: `>>` for Basic, `><` for

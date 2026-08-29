@@ -30,6 +30,8 @@ export const IMAGE_MARKER = "⇢▣%%oab:image:v1%%";
 export const CLOZE_OPEN_MARKER = "⟦%%oab:cloze:v1%%";
 export const CLOZE_CLOSE_MARKER = "⟧%%oab:end:v1%%";
 
+const CANONICAL_MARKER_FRAGMENT = "%%oab:";
+
 const LIST_START_PATTERN = /^(.*?)\s*⇢\[%%oab:list:v1%%\s*(?:#prio([1-4]))?\s*$/i;
 const DUMP_START_PATTERN = /^(.*?)\s*⇢\{%%oab:dump:v1%%\s*(?:#prio([1-4]))?\s*$/i;
 const IMAGE_PATTERN = /^(.*?)\s*⇢▣%%oab:image:v1%%\s*(.*?)\s*(?:#prio([1-4]))?\s*$/i;
@@ -85,7 +87,9 @@ export class FlashcardParser {
 
       const cardLine = cardLineContent(line);
 
-      const listStart = cardLine.text.match(LIST_START_PATTERN);
+      const listStart = markerIsActive(cardLine.text, LIST_START_MARKER)
+        ? cardLine.text.match(LIST_START_PATTERN)
+        : null;
       if (listStart) {
         const endIndex = findBlockEnd(lines, index + 1, LIST_END_MARKER);
         if (endIndex !== -1) {
@@ -127,7 +131,9 @@ export class FlashcardParser {
         continue;
       }
 
-      const dumpStart = cardLine.text.match(DUMP_START_PATTERN);
+      const dumpStart = markerIsActive(cardLine.text, DUMP_START_MARKER)
+        ? cardLine.text.match(DUMP_START_PATTERN)
+        : null;
       if (dumpStart) {
         const endIndex = findBlockEnd(lines, index + 1, DUMP_END_MARKER);
         if (endIndex !== -1) {
@@ -262,7 +268,9 @@ function parseInlineCard(
   headings: string[],
   listContext: string[]
 ): ParsedCard | undefined {
-  const imageMatch = content.text.match(IMAGE_PATTERN);
+  const imageMatch = markerIsActive(content.text, IMAGE_MARKER)
+    ? content.text.match(IMAGE_PATTERN)
+    : null;
   if (imageMatch && (imageMatch[1]?.trim() || imageMatch[2]?.trim())) {
     return inlineCard(
       ordinal,
@@ -278,7 +286,7 @@ function parseInlineCard(
     );
   }
 
-  const reverseIndex = content.text.indexOf(REVERSE_MARKER);
+  const reverseIndex = activeMarkerIndex(content.text, REVERSE_MARKER);
   if (reverseIndex >= 0) {
     const front = content.text.slice(0, reverseIndex).trim();
     const priorityResult = stripPriority(content.text.slice(reverseIndex + REVERSE_MARKER.length));
@@ -298,7 +306,7 @@ function parseInlineCard(
     }
   }
 
-  const basicIndex = content.text.indexOf(BASIC_MARKER);
+  const basicIndex = activeMarkerIndex(content.text, BASIC_MARKER);
   if (basicIndex >= 0) {
     const front = content.text.slice(0, basicIndex).trim();
     const priorityResult = stripPriority(content.text.slice(basicIndex + BASIC_MARKER.length));
@@ -319,7 +327,7 @@ function parseInlineCard(
   }
 
   const priorityResult = stripPriority(content.text);
-  const clozeMatches = [...priorityResult.value.matchAll(/⟦%%oab:cloze:v1%%([^\n]+?)⟧%%oab:end:v1%%/g)];
+  const clozeMatches = activeClozeMatches(priorityResult.value);
   if (clozeMatches.length === 0) {
     return undefined;
   }
@@ -327,10 +335,13 @@ function parseInlineCard(
     /⟦%%oab:cloze:v1%%([^\n]+?)⟧%%oab:end:v1%%/g,
     (_match, answer: string, offset: number) => {
       const clozeNumber = clozeMatches.findIndex((candidate) => candidate.index === offset) + 1;
+      if (clozeNumber === 0) {
+        return _match;
+      }
       return ankiCloze(clozeNumber, answer);
     }
   );
-  const markerFrom = content.from + content.text.indexOf(CLOZE_OPEN_MARKER);
+  const markerFrom = content.from + (clozeMatches[0]?.index ?? 0);
   return makeCard({
     ordinal,
     kind: "cloze",
@@ -355,7 +366,7 @@ function parseClozeTableRow(
   listContexts: Map<number, string[]>
 ): ParsedCard | undefined {
   const current = lines[index];
-  if (!current || !current.text.includes(CLOZE_OPEN_MARKER) || !isTableRow(current.text)) {
+  if (!current || activeClozeMatches(current.text).length === 0 || !isTableRow(current.text)) {
     return undefined;
   }
 
@@ -416,12 +427,15 @@ function isTableDelimiter(value: string): boolean {
 
 function numberedClozeText(value: string): string | undefined {
   const clozePattern = /⟦%%oab:cloze:v1%%([^\n]+?)⟧%%oab:end:v1%%/g;
-  const matches = [...value.matchAll(clozePattern)];
+  const matches = activeClozeMatches(value);
   if (matches.length === 0) {
     return undefined;
   }
   let clozeNumber = 0;
-  return value.replace(clozePattern, (_match, answer: string) => {
+  return value.replace(clozePattern, (match, answer: string, offset: number) => {
+    if (!matches.some((candidate) => candidate.index === offset)) {
+      return match;
+    }
     clozeNumber += 1;
     return ankiCloze(clozeNumber, answer);
   });
@@ -436,10 +450,120 @@ function ankiCloze(clozeNumber: number, answer: string): string {
 }
 
 function revealClozeAnswers(value: string): string {
+  const matches = activeClozeMatches(value);
   return value.replace(
     /⟦%%oab:cloze:v1%%([^\n]+?)⟧%%oab:end:v1%%/g,
-    (_match, answer: string) => answer.trim()
+    (match, answer: string, offset: number) =>
+      matches.some((candidate) => candidate.index === offset) ? answer.trim() : match
   );
+}
+
+function activeClozeMatches(value: string): RegExpMatchArray[] {
+  const codeRanges = inlineCodeRanges(value);
+  return [...value.matchAll(/⟦%%oab:cloze:v1%%([^\n]+?)⟧%%oab:end:v1%%/g)]
+    .filter((match) => !offsetInsideRanges(match.index ?? -1, codeRanges));
+}
+
+function markerIsActive(value: string, marker: string): boolean {
+  return activeMarkerIndex(value, marker) >= 0;
+}
+
+function activeMarkerIndex(value: string, marker: string): number {
+  const codeRanges = inlineCodeRanges(value);
+  let from = 0;
+  while (from < value.length) {
+    const index = value.indexOf(marker, from);
+    if (index < 0) {
+      return -1;
+    }
+    if (!offsetInsideRanges(index, codeRanges)) {
+      return index;
+    }
+    from = index + marker.length;
+  }
+  return -1;
+}
+
+interface OffsetRange {
+  from: number;
+  to: number;
+}
+
+function inlineCodeRanges(value: string): OffsetRange[] {
+  const ranges: OffsetRange[] = [];
+  let index = 0;
+  while (index < value.length) {
+    if (value[index] !== "`" || isEscaped(value, index)) {
+      index += 1;
+      continue;
+    }
+    const openingFrom = index;
+    while (value[index] === "`") {
+      index += 1;
+    }
+    const delimiterLength = index - openingFrom;
+    let closingFrom = index;
+    while (closingFrom < value.length) {
+      if (value[closingFrom] !== "`") {
+        closingFrom += 1;
+        continue;
+      }
+      let closingTo = closingFrom;
+      while (value[closingTo] === "`") {
+        closingTo += 1;
+      }
+      if (closingTo - closingFrom === delimiterLength) {
+        ranges.push({ from: openingFrom, to: closingTo });
+        index = closingTo;
+        break;
+      }
+      closingFrom = closingTo;
+    }
+    if (closingFrom >= value.length) {
+      index = openingFrom + delimiterLength;
+    }
+  }
+  return ranges;
+}
+
+function isEscaped(value: string, index: number): boolean {
+  let backslashes = 0;
+  for (let cursor = index - 1; cursor >= 0 && value[cursor] === "\\"; cursor -= 1) {
+    backslashes += 1;
+  }
+  return backslashes % 2 === 1;
+}
+
+function offsetInsideRanges(offset: number, ranges: OffsetRange[]): boolean {
+  return ranges.some((range) => offset >= range.from && offset < range.to);
+}
+
+export function maskMarkdownCode(source: string): string {
+  const lines = source.split("\n");
+  let fence: string | null = null;
+  return lines.map((line) => {
+    const fenceMatch = line.match(FENCE_PATTERN);
+    if (fenceMatch) {
+      const marker = fenceMatch[1]?.[0];
+      fence = fence === null ? marker ?? null : fence === marker ? null : fence;
+      return " ".repeat(line.length);
+    }
+    if (fence !== null) {
+      return " ".repeat(line.length);
+    }
+    // String offsets throughout the parser are UTF-16 code-unit offsets. Keep
+    // the same representation here so emoji before a code span cannot shift
+    // the masked range and expose a documented marker accidentally.
+    const characters = line.split("");
+    for (const range of inlineCodeRanges(line)) {
+      characters.fill(" ", range.from, range.to);
+    }
+    return characters.join("");
+  }).join("\n");
+}
+
+export function containsActiveCanonicalMarker(source: string): boolean {
+  return maskMarkdownCode(source).includes(CANONICAL_MARKER_FRAGMENT);
 }
 
 function parseNestedInlineListCards(

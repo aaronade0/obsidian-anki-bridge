@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import MarkdownIt from "markdown-it";
-import { FlashcardParser } from "../src/parser";
+import { FlashcardParser, containsActiveCanonicalMarker, maskMarkdownCode } from "../src/parser";
 
 const parser = new FlashcardParser();
 
@@ -176,6 +176,48 @@ describe("FlashcardParser", () => {
     expect(cards).toHaveLength(1);
     expect(cards[0]).toMatchObject({ kind: "dump", front: "Explain the program" });
     expect(cards[0]?.back).toContain("const answer = 42;");
+  });
+
+  it("ignores every canonical card format inside Markdown inline code", () => {
+    const source = [
+      "`Front ⇢%%oab:basic:v1%% Back #prio1`",
+      "`Term ⇄%%oab:reverse:v1%% Definition #prio2`",
+      "`Capital: ⟦%%oab:cloze:v1%%Berlin⟧%%oab:end:v1%% #prio3`",
+      "`Countries ⇢[%%oab:list:v1%%`",
+      "`- Germany`",
+      "`]⇠%%oab:end:v1%%`",
+      "`Explain ⇢{%%oab:dump:v1%%`",
+      "`Long answer`",
+      "`}⇠%%oab:end:v1%%`",
+      "🧪 before `Label ⇢▣%%oab:image:v1%%![[Example.png]] #prio4`"
+    ].join("\n");
+
+    expect(parser.parse(source)).toEqual([]);
+    expect(containsActiveCanonicalMarker(source)).toBe(false);
+    expect(maskMarkdownCode(source)).not.toContain("%%oab:");
+  });
+
+  it("still parses markers outside inline code and preserves code in card content", () => {
+    const cards = parser.parse([
+      "What does `const` declare? ⇢%%oab:basic:v1%%A binding",
+      "Ignore `fake ⇢%%oab:basic:v1%% card` but parse this ⇄%%oab:reverse:v1%%Answer",
+      "Use `⟦%%oab:cloze:v1%%literal⟧%%oab:end:v1%%` and ⟦%%oab:cloze:v1%%active⟧%%oab:end:v1%%"
+    ].join("\n"));
+
+    expect(cards).toHaveLength(3);
+    expect(cards[0]).toMatchObject({ front: "What does `const` declare?", back: "A binding" });
+    expect(cards[1]).toMatchObject({ kind: "reverse", back: "Answer" });
+    expect(cards[2]?.front).toBe("Use `⟦%%oab:cloze:v1%%literal⟧%%oab:end:v1%%` and {{c1::active}}");
+  });
+
+  it("ignores canonical markers in fenced code during fast marker scans", () => {
+    const source = [
+      "```md",
+      "Question ⇢%%oab:basic:v1%%Answer",
+      "```"
+    ].join("\n");
+
+    expect(containsActiveCanonicalMarker(source)).toBe(false);
   });
 
   it("does not throw on unfinished block markers", () => {
