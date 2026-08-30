@@ -105,7 +105,7 @@ export default class ObsidianAnkiBridge extends Plugin {
 
   async onload(): Promise<void> {
     await this.loadPluginData();
-    const storedDeviceId = this.app.loadLocalStorage(DEVICE_ID_STORAGE_KEY);
+    const storedDeviceId: unknown = this.app.loadLocalStorage(DEVICE_ID_STORAGE_KEY);
     const deviceId = typeof storedDeviceId === "string" && storedDeviceId.startsWith("device_")
       ? storedDeviceId
       : createDeviceId();
@@ -387,11 +387,11 @@ export default class ObsidianAnkiBridge extends Plugin {
 
   private installDeletionOriginTracking(): void {
     const fileManager = this.app.fileManager;
-    const originalTrashFile = fileManager.trashFile;
+    const originalTrashFile = fileManager.trashFile.bind(fileManager);
     const wrappedTrashFile = async (file: TAbstractFile): Promise<void> => {
       const paths = this.registerDeletionIntent(file);
       try {
-        await originalTrashFile.call(fileManager, file);
+        await originalTrashFile(file);
       } catch (error) {
         for (const path of paths) {
           this.clearDeletionIntent(path);

@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.3.1 - Community review fixes
+
+- Replaced the source-filter HTML heading with Obsidian's `Setting` heading
+  API, resolving the failed automated Community review.
+- Resolved review warnings around an unused dependency, unsafe global access,
+  detached method binding, and cross-window DOM handling.
+
 ## 1.3.0 - Configurable source filters
 
 - Added non-destructive path and filename exclusions with case-insensitive

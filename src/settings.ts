@@ -106,7 +106,9 @@ export class BridgeSettingTab extends PluginSettingTab {
           }
         }));
 
-    containerEl.createEl("h3", { text: "Source filters" });
+    new Setting(containerEl)
+      .setName("Source filters")
+      .setHeading();
     containerEl.createEl("p", {
       text: "Optional filters control which Markdown notes can create or update cards. Existing Anki cards are left unchanged when a source becomes excluded. Exclusions always override included folders."
     });

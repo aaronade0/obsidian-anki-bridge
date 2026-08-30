@@ -71,7 +71,7 @@ export class ObsidianVisualRenderer implements VisualRenderer {
       const initial = page.getViewport({ scale: 1 });
       const scale = Math.min(2, 1200 / Math.max(1, initial.width));
       const viewport = page.getViewport({ scale });
-      const canvas = window.document.createElement("canvas");
+      const canvas = createEl("canvas");
       canvas.width = Math.ceil(viewport.width);
       canvas.height = Math.ceil(viewport.height);
       const context = canvas.getContext("2d", { alpha: false });
@@ -260,13 +260,13 @@ function captureRenderedVisual(container: HTMLElement): RenderedVisual | undefin
     .sort((left, right) => visualArea(right) - visualArea(left));
   for (const candidate of candidates) {
     try {
-      if (candidate instanceof HTMLCanvasElement) {
+      if (candidate.instanceOf(HTMLCanvasElement)) {
         return captureCanvas(candidate);
       }
-      if (candidate instanceof SVGSVGElement) {
+      if (candidate.instanceOf(SVGSVGElement)) {
         return captureSvg(candidate);
       }
-      if (candidate instanceof HTMLImageElement && candidate.complete && candidate.naturalWidth > 0) {
+      if (candidate.instanceOf(HTMLImageElement) && candidate.complete && candidate.naturalWidth > 0) {
         return captureImage(candidate);
       }
     } catch {
@@ -279,7 +279,7 @@ function captureRenderedVisual(container: HTMLElement): RenderedVisual | undefin
 function captureCanvas(source: HTMLCanvasElement): RenderedVisual {
   const width = Math.max(1, source.width);
   const height = Math.max(1, source.height);
-  const target = document.createElement("canvas");
+  const target = createEl("canvas");
   target.width = width;
   target.height = height;
   const context = target.getContext("2d", { alpha: false });
@@ -295,7 +295,7 @@ function captureCanvas(source: HTMLCanvasElement): RenderedVisual {
 function captureImage(source: HTMLImageElement): RenderedVisual {
   const width = Math.max(1, source.naturalWidth);
   const height = Math.max(1, source.naturalHeight);
-  const target = document.createElement("canvas");
+  const target = createEl("canvas");
   target.width = width;
   target.height = height;
   const context = target.getContext("2d", { alpha: false });
@@ -328,7 +328,7 @@ function captureSvg(source: SVGSVGElement): RenderedVisual {
     }
   });
   const viewBox = clone.viewBox.baseVal;
-  const background = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+  const background = createSvg("rect");
   background.setAttribute("x", String(viewBox?.x ?? 0));
   background.setAttribute("y", String(viewBox?.y ?? 0));
   background.setAttribute("width", String(viewBox?.width || dimensions.width));
@@ -399,17 +399,17 @@ function visualArea(element: SVGSVGElement | HTMLCanvasElement | HTMLImageElemen
 }
 
 function visualDimensions(element: SVGSVGElement | HTMLCanvasElement | HTMLImageElement): { width: number; height: number } {
-  if (element instanceof HTMLCanvasElement) {
+  if (element.instanceOf(HTMLCanvasElement)) {
     return { width: element.width, height: element.height };
   }
-  if (element instanceof HTMLImageElement && element.naturalWidth > 0 && element.naturalHeight > 0) {
+  if (element.instanceOf(HTMLImageElement) && element.naturalWidth > 0 && element.naturalHeight > 0) {
     return { width: element.naturalWidth, height: element.naturalHeight };
   }
   const bounds = element.getBoundingClientRect();
   if (bounds.width > 1 && bounds.height > 1) {
     return { width: Math.ceil(bounds.width), height: Math.ceil(bounds.height) };
   }
-  if (element instanceof SVGSVGElement && element.viewBox.baseVal.width > 0 && element.viewBox.baseVal.height > 0) {
+  if (element.instanceOf(SVGSVGElement) && element.viewBox.baseVal.width > 0 && element.viewBox.baseVal.height > 0) {
     return { width: element.viewBox.baseVal.width, height: element.viewBox.baseVal.height };
   }
   return { width: 0, height: 0 };

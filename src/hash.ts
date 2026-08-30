@@ -16,7 +16,7 @@ export function normalizeForFingerprint(value: string): string {
 }
 
 export function createKey(prefix: string): string {
-  const uuid = globalThis.crypto?.randomUUID?.();
+  const uuid = typeof window === "undefined" ? undefined : window.crypto?.randomUUID?.();
   if (uuid) {
     return `${prefix}_${uuid}`;
   }
