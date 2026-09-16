@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import MarkdownIt from "markdown-it";
-import { FlashcardParser, containsActiveCanonicalMarker, maskMarkdownCode } from "../src/parser";
+import { FlashcardParser, containsActiveCanonicalMarker, contextLabel, maskMarkdownCode } from "../src/parser";
 
 const parser = new FlashcardParser();
 
@@ -234,5 +234,54 @@ describe("FlashcardParser", () => {
 
   it("ignores visible arrows unless the versioned marker is present", () => {
     expect(parser.parse("Natural notation: A ⇢ B and C ⇄ D and ⟦text⟧")).toEqual([]);
+  });
+});
+
+describe("context labels", () => {
+  it("keeps only the question side of a heading that is itself a card", () => {
+    const source = [
+      "# [[Compton-Effekt]]",
+      "## Herleitung Wellenlängenänderung [[Compton-Effekt]] ⇢%%oab:basic:v1%% ![[Skizze.png]] #prio2",
+      "Was ist der Streuwinkel? ⇢%%oab:basic:v1%% Der Winkel zwischen ein- und auslaufendem Photon",
+      ""
+    ].join("\n");
+
+    const [card] = parser.parse(source);
+
+    expect(card?.headingPath).toEqual([
+      "[[Compton-Effekt]]",
+      "Herleitung Wellenlängenänderung [[Compton-Effekt]]"
+    ]);
+  });
+
+  it("masks cloze deletions instead of revealing the answer", () => {
+    const source = [
+      "# Die Hauptstadt ist ⟦%%oab:cloze:v1%%Berlin⟧%%oab:end:v1%%",
+      "Welches Land? ⇢%%oab:basic:v1%% Deutschland",
+      ""
+    ].join("\n");
+
+    const [card] = parser.parse(source);
+
+    expect(card?.headingPath).toEqual(["Die Hauptstadt ist […]"]);
+  });
+
+  it("hides answers of enclosing list items", () => {
+    const source = [
+      "- Energie ⟦%%oab:cloze:v1%%bleibt erhalten⟧%%oab:end:v1%%",
+      "  - Reibung ⇢%%oab:basic:v1%% wandelt Energie in Wärme um",
+      ""
+    ].join("\n");
+
+    const [, nested] = parser.parse(source);
+
+    expect(nested).toMatchObject({ front: "Reibung", listContext: ["Energie […]"] });
+  });
+
+  it("strips card syntax, priorities and embeds from a label", () => {
+    expect(contextLabel("Auftrieb ⇢[%%oab:list:v1%% #prio1")).toBe("Auftrieb");
+    expect(contextLabel("Aufbau ⇢▣%%oab:image:v1%% ![[Flügel.png]]")).toBe("Aufbau");
+    expect(contextLabel("Bild ![[Pasted image 1.png]] dazu")).toBe("Bild Pasted image 1 dazu");
+    expect(contextLabel("Gleichung `a ⇢%%oab:basic:v1%% b` bleibt")).toBe("Gleichung `a ⇢%%oab:basic:v1%% b` bleibt");
   });
 });

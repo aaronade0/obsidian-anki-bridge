@@ -6,9 +6,10 @@ import {
   type AnkiConnectClient
 } from "./anki-connect";
 import { sourceContext } from "./deck";
+import { renderLinkedText, type VaultLinkContext } from "./link-render";
 import { renderForAnki } from "./render";
 import { ownershipTag } from "./ownership";
-import { renderContext, sourceHref } from "./source-link";
+import { renderContext, sourceHref, type ContextLabelRenderer } from "./source-link";
 import type { DesiredAnkiNote, ParsedCard, RegistryCard } from "./types";
 import type { VisualRenderer } from "./visual-renderer";
 
@@ -29,6 +30,12 @@ export async function buildDesiredNotes(
 ): Promise<DesiredNotesResult> {
   const notes: DesiredAnkiNote[] = [];
   const warnings: Array<{ cardKey: string; message: string }> = [];
+  const vaultLinks: VaultLinkContext = {
+    vaultName,
+    sourcePath,
+    resolve: (linkpath) => app.metadataCache.getFirstLinkpathDest(linkpath, sourcePath)?.path
+  };
+  const renderLabel: ContextLabelRenderer = (value) => renderLinkedText(value, vaultLinks);
 
   for (const parsed of parsedCards) {
     const registry = registryCards.find((card) => card.ordinal === parsed.ordinal && card.status === "active");
@@ -44,7 +51,8 @@ export async function buildDesiredNotes(
         context.noteName,
         context.headingPath,
         sourceHref(vaultName, registry.key),
-        context.listContext
+        context.listContext,
+        renderLabel
       );
       const rendered = await renderForAnki(
         app,
@@ -52,7 +60,7 @@ export async function buildDesiredNotes(
         sourcePath,
         parsed.front,
         visualRenderer,
-        { vaultName, sourceHref: sourceHref(vaultName, registry.key) }
+        { vaultName, sourceHref: sourceHref(vaultName, registry.key), vaultLinks }
       );
       warnings.push(...rendered.warnings.map((message) => ({ cardKey: registry.key, message })));
       notes.push({
@@ -81,7 +89,7 @@ export async function buildDesiredNotes(
         sourcePath,
         parsed.front,
         visualRenderer,
-        { vaultName, sourceHref: sourceHref(vaultName, registry.key) }
+        { vaultName, sourceHref: sourceHref(vaultName, registry.key), vaultLinks }
       );
       warnings.push(...renderedPrompt.warnings.map((message) => ({ cardKey: registry.key, message })));
       for (const [itemOrdinal, item] of parsed.items.entries()) {
@@ -97,7 +105,7 @@ export async function buildDesiredNotes(
           sourcePath,
           item,
           visualRenderer,
-          { vaultName, sourceHref: sourceHref(vaultName, child.key) }
+          { vaultName, sourceHref: sourceHref(vaultName, child.key), vaultLinks }
         );
         warnings.push(...renderedItem.warnings.map((message) => ({ cardKey: child.key, message })));
         const contextHtml = renderContext(
@@ -105,7 +113,8 @@ export async function buildDesiredNotes(
           context.noteName,
           context.headingPath,
           sourceHref(vaultName, child.key),
-          context.listContext
+          context.listContext,
+          renderLabel
         );
         notes.push({
           cardKey: child.key,
@@ -136,7 +145,7 @@ export async function buildDesiredNotes(
       sourcePath,
       parsed.front,
       visualRenderer,
-      { vaultName, sourceHref: cardSourceHref }
+      { vaultName, sourceHref: cardSourceHref, vaultLinks }
     );
     const renderedBack = await renderForAnki(
       app,
@@ -144,14 +153,15 @@ export async function buildDesiredNotes(
       sourcePath,
       parsed.back,
       visualRenderer,
-      { vaultName, sourceHref: cardSourceHref }
+      { vaultName, sourceHref: cardSourceHref, vaultLinks }
     );
     const contextHtml = renderContext(
       context.folderPath,
       context.noteName,
       context.headingPath,
       sourceHref(vaultName, registry.key),
-      context.listContext
+      context.listContext,
+      renderLabel
     );
     warnings.push(
       ...[...renderedFront.warnings, ...renderedBack.warnings].map((message) => ({ cardKey: registry.key, message }))

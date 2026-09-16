@@ -1,3 +1,5 @@
+import { stripLinkSyntax } from "./wikilink";
+
 export function deriveDeckName(deckRoot: string, vaultName: string, sourcePath: string): string {
   const normalizedPath = sourcePath.replace(/\\/g, "/").replace(/^\/+/, "");
   const segments = normalizedPath.split("/").filter(Boolean);
@@ -21,7 +23,10 @@ export function sourceContext(sourcePath: string, headingPath: string[], listCon
   const fileName = segments.pop() ?? "Untitled.md";
   const noteName = fileName.replace(/\.md$/i, "");
   const cleanedHeadings = headingPath.filter(Boolean);
-  if (cleanedHeadings[0]?.localeCompare(noteName, undefined, { sensitivity: "accent" }) === 0) {
+  // A title heading repeats the note name, whether it is written as plain text
+  // or as a self link such as `# [[Compton-Effekt]]`.
+  const firstHeading = cleanedHeadings[0];
+  if (firstHeading && stripLinkSyntax(firstHeading).localeCompare(noteName, undefined, { sensitivity: "accent" }) === 0) {
     cleanedHeadings.shift();
   }
   return {

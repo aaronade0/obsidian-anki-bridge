@@ -1,9 +1,11 @@
 import MarkdownIt from "markdown-it";
 import { App, TFile } from "obsidian";
 import { stableHash } from "./hash";
+import { linkAnchor, type VaultLinkContext } from "./link-render";
 import { mathJaxForAnki, replaceObsidianMath } from "./math";
 import { escapeHtml, fileHref } from "./source-link";
 import { isVisualCodeLanguage, type RenderedVisual, type VisualRenderer } from "./visual-renderer";
+import { replaceInternalLinks } from "./wikilink";
 
 export interface MediaStore {
   storeMediaFile(filename: string, data: string): Promise<string>;
@@ -17,6 +19,8 @@ export interface RenderResult {
 export interface RenderLinkContext {
   vaultName: string;
   sourceHref: string;
+  /** Resolves `[[note]]` targets back into the vault. */
+  vaultLinks?: VaultLinkContext;
 }
 
 const markdown = new MarkdownIt({ html: false, linkify: true, breaks: true });
@@ -117,6 +121,12 @@ export async function renderForAnki(
   });
 
   prepared = replaceObsidianMath(prepared, (fragment) => inject(mathJaxForAnki(fragment)));
+
+  // Embeds, images and math are tokenized by now, so only real links remain.
+  const vaultLinks = links?.vaultLinks;
+  if (vaultLinks) {
+    prepared = replaceInternalLinks(prepared, (link) => inject(linkAnchor(link, vaultLinks)));
+  }
 
   for (const [key, raw] of protectedBlocks) {
     prepared = prepared.replaceAll(key, raw);

@@ -281,6 +281,12 @@ main table { width: 100%; border-collapse: collapse; }
 main th, main td { border: 1px solid #aaa; padding: .35rem .5rem; }
 main pre { overflow-x: auto; padding: .8rem; border-radius: .4rem; background: rgba(127,127,127,.12); }
 .oab-context a.note { text-decoration: none; }
+.oab-link { color: #7c3aed; text-decoration: none; border-bottom: 1px solid rgba(124, 58, 237, .38); }
+.oab-link:hover { border-bottom-color: #7c3aed; }
+.oab-link.is-unresolved { color: #b45309; border-bottom-style: dashed; border-bottom-color: rgba(180, 83, 9, .5); }
+.nightMode .oab-link { color: #c4b5fd; border-bottom-color: rgba(196, 181, 253, .38); }
+.nightMode .oab-link.is-unresolved { color: #fbbf24; border-bottom-color: rgba(251, 191, 36, .5); }
+.oab-context .oab-link { color: inherit; border-bottom-color: currentColor; opacity: .95; }
 .cloze { color: #7c3aed; font-weight: 700; }
 `;
 

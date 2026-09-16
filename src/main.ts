@@ -210,7 +210,13 @@ export default class ObsidianAnkiBridge extends Plugin {
       }
     }));
 
-    this.registerObsidianProtocolHandler("anki-bridge", (params) => void this.openSourceCard(params.card));
+    this.registerObsidianProtocolHandler("anki-bridge", (params) => {
+      if (params.link) {
+        void this.openVaultLink(params.link, params.source);
+        return;
+      }
+      void this.openSourceCard(params.card);
+    });
     this.app.workspace.onLayoutReady(() => {
       if (Platform.isMobile) {
         void this.refreshMobileOutboxCount();
@@ -1409,6 +1415,22 @@ export default class ObsidianAnkiBridge extends Plugin {
     await this.savePluginData();
     if (manual || moved > 0) {
       new Notice(`Path audit: ${moved} moved note(s) matched unambiguously.`, 8_000);
+    }
+  }
+
+  private async openVaultLink(linktext: string, sourcePath: string | undefined): Promise<void> {
+    const from = sourcePath ?? "";
+    const target = linktext.split("#", 1)[0] ?? linktext;
+    // Resolve first: `openLinkText` would otherwise offer to create a note for
+    // a link that no longer points anywhere.
+    if (target && !this.app.metadataCache.getFirstLinkpathDest(target, from)) {
+      new Notice(`The linked note does not exist: ${target}`, 8_000);
+      return;
+    }
+    try {
+      await this.app.workspace.openLinkText(linktext, from, false);
+    } catch (error) {
+      new Notice(`The linked note could not be opened: ${errorMessage(error)}`, 10_000);
     }
   }
 

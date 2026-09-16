@@ -32,4 +32,9 @@ describe("deck derivation", () => {
   it("does not repeat a top-level heading equal to the note name", () => {
     expect(sourceContext("Physics/Kinematics.md", ["Kinematics", "Derivation"]).headingPath).toEqual(["Derivation"]);
   });
+
+  it("recognizes a title heading written as a self link", () => {
+    expect(sourceContext("Physik/Compton-Effekt.md", ["[[Compton-Effekt]]", "Herleitung"]).headingPath)
+      .toEqual(["Herleitung"]);
+  });
 });

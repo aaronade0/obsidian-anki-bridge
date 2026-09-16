@@ -1,5 +1,7 @@
 import { normalizeForFingerprint, stableHash } from "./hash";
+import { inlineCodeRanges, offsetInsideRanges } from "./inline-code";
 import type { CardKind, ParsedCard, Priority, TextRange } from "./types";
+import { describeEmbeds } from "./wikilink";
 
 interface SourceLine {
   number: number;
@@ -484,60 +486,6 @@ function activeMarkerIndex(value: string, marker: string): number {
   return -1;
 }
 
-interface OffsetRange {
-  from: number;
-  to: number;
-}
-
-function inlineCodeRanges(value: string): OffsetRange[] {
-  const ranges: OffsetRange[] = [];
-  let index = 0;
-  while (index < value.length) {
-    if (value[index] !== "`" || isEscaped(value, index)) {
-      index += 1;
-      continue;
-    }
-    const openingFrom = index;
-    while (value[index] === "`") {
-      index += 1;
-    }
-    const delimiterLength = index - openingFrom;
-    let closingFrom = index;
-    while (closingFrom < value.length) {
-      if (value[closingFrom] !== "`") {
-        closingFrom += 1;
-        continue;
-      }
-      let closingTo = closingFrom;
-      while (value[closingTo] === "`") {
-        closingTo += 1;
-      }
-      if (closingTo - closingFrom === delimiterLength) {
-        ranges.push({ from: openingFrom, to: closingTo });
-        index = closingTo;
-        break;
-      }
-      closingFrom = closingTo;
-    }
-    if (closingFrom >= value.length) {
-      index = openingFrom + delimiterLength;
-    }
-  }
-  return ranges;
-}
-
-function isEscaped(value: string, index: number): boolean {
-  let backslashes = 0;
-  for (let cursor = index - 1; cursor >= 0 && value[cursor] === "\\"; cursor -= 1) {
-    backslashes += 1;
-  }
-  return backslashes % 2 === 1;
-}
-
-function offsetInsideRanges(offset: number, ranges: OffsetRange[]): boolean {
-  return ranges.some((range) => offset >= range.from && offset < range.to);
-}
-
 export function maskMarkdownCode(source: string): string {
   const lines = source.split("\n");
   let fence: string | null = null;
@@ -666,7 +614,7 @@ function collectListContexts(lines: SourceLine[]): Map<number, string[]> {
         stack.pop();
       }
       contexts.set(line.number, stack.map((entry) => entry.text));
-      const text = listContextLabel(item[2] ?? "");
+      const text = contextLabel(item[2] ?? "");
       if (text) {
         stack.push({ indent, text });
       }
@@ -699,10 +647,45 @@ function visualIndent(value: string): number {
   return width;
 }
 
-function listContextLabel(value: string): string {
-  const sanitized = sanitizeNestedInlineCards(value).replace(/\s+/g, " ").trim();
+/**
+ * Headings and list ancestors often carry a flashcard themselves. Context has
+ * to stay answerable, so only the part a reviewer would see on the front of
+ * that card survives: everything before the card marker, and cloze deletions
+ * masked instead of revealed.
+ */
+export function contextLabel(value: string): string {
+  const withoutAnswer = maskClozeDeletions(truncateAtCardMarker(value));
+  const sanitized = describeEmbeds(stripPriority(withoutAnswer).value)
+    .replace(/\s+/g, " ")
+    .trim();
   return sanitized.length > 160 ? `${sanitized.slice(0, 157)}…` : sanitized;
 }
+
+const CONTEXT_MARKERS = [
+  BASIC_MARKER,
+  REVERSE_MARKER,
+  IMAGE_MARKER,
+  LIST_START_MARKER,
+  DUMP_START_MARKER
+];
+
+function truncateAtCardMarker(value: string): string {
+  const indexes = CONTEXT_MARKERS
+    .map((marker) => activeMarkerIndex(value, marker))
+    .filter((index) => index >= 0);
+  return indexes.length > 0 ? value.slice(0, Math.min(...indexes)) : value;
+}
+
+function maskClozeDeletions(value: string): string {
+  const matches = activeClozeMatches(value);
+  return value.replace(
+    /⟦%%oab:cloze:v1%%([^\n]+?)⟧%%oab:end:v1%%/g,
+    (match, _answer: string, offset: number) =>
+      matches.some((candidate) => candidate.index === offset) ? CLOZE_GAP : match
+  );
+}
+
+export const CLOZE_GAP = "[…]";
 
 function updateHeadingPath(headings: string[], line: string): void {
   const match = line.match(HEADING_PATTERN);
@@ -711,7 +694,7 @@ function updateHeadingPath(headings: string[], line: string): void {
   }
   const level = match[1]?.length ?? 1;
   headings.splice(level - 1);
-  headings[level - 1] = match[2]?.trim() ?? "";
+  headings[level - 1] = contextLabel(match[2] ?? "");
   for (let index = 0; index < headings.length; index += 1) {
     if (headings[index] === undefined) {
       headings[index] = "";
