@@ -51,6 +51,11 @@ import type {
 import { ObsidianVisualRenderer } from "./visual-renderer";
 import { normalizeMarkdownPath } from "./vault-path";
 import { isSourcePathAllowed } from "./source-filter";
+import {
+  forgettableRegistryFiles,
+  isMissingFileError,
+  prunableSyncFailures
+} from "./vanished-source";
 import README_MARKDOWN from "../README.md";
 
 const DEFAULT_SETTINGS: PluginSettings = {
@@ -191,6 +196,9 @@ export default class ObsidianAnkiBridge extends Plugin {
     }));
     this.registerEvent(this.app.vault.on("delete", (file) => {
       if (file instanceof TFile && file.extension === "md") {
+        // A debounced sync scheduled just before the deletion would otherwise
+        // run against a file that no longer exists and report a read failure.
+        this.clearPendingSync(file.path);
         const explicitlyDeletedInObsidian = this.consumeDeletionIntent(file.path);
         if (Platform.isMobile) {
           if (explicitlyDeletedInObsidian) {
@@ -549,6 +557,70 @@ export default class ObsidianAnkiBridge extends Plugin {
     }
   }
 
+  /**
+   * Answers whether a note is really still there. The vault index can lag behind
+   * an external deletion, so the storage adapter is asked first and the index is
+   * only a fallback for adapters that cannot answer.
+   */
+  private async sourceStillExists(path: string): Promise<boolean> {
+    try {
+      return await this.app.vault.adapter.exists(path);
+    } catch {
+      return this.app.vault.getAbstractFileByPath(path) instanceof TFile;
+    }
+  }
+
+  // The vault index can list a file that the filesystem no longer holds, for
+  // example right after an external deletion. Reading such a file must not abort
+  // a whole scan, so the caller simply skips it.
+  private async readIfPresent(file: TFile, useCache = true): Promise<string | undefined> {
+    try {
+      return useCache ? await this.app.vault.cachedRead(file) : await this.app.vault.read(file);
+    } catch (error) {
+      if (isMissingFileError(error) && !(await this.sourceStillExists(file.path))) {
+        return undefined;
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Handles a source note that disappeared while a synchronization was pending.
+   * A note that never held cards is forgotten silently; only notes with
+   * registered cards are reported, because only there can Anki content be lost.
+   */
+  private async handleVanishedSource(path: string, explicitlyDeletedInObsidian: boolean): Promise<void> {
+    this.clearPendingSync(path);
+    this.resolveConflict("SYNC_FAILED", path);
+    if (!this.data.files.some((candidate) => candidate.path === path)) {
+      await this.savePluginData();
+      return;
+    }
+    // `handleDelete` reports the note only when registered cards still point at
+    // it and forgets it silently otherwise.
+    await this.handleDelete(path, explicitlyDeletedInObsidian);
+  }
+
+  /**
+   * Clears read failures left behind by earlier plugin versions for notes that
+   * vanished without ever holding cards. Without this, those entries would stay
+   * in the conflict report forever because nothing can resolve them.
+   */
+  private async pruneVanishedSourceConflicts(): Promise<void> {
+    let pruned = false;
+    for (const conflict of prunableSyncFailures(this.data.conflicts, this.data.files, this.data.cards)) {
+      if (!conflict.path || (await this.sourceStillExists(conflict.path))) {
+        continue;
+      }
+      conflict.resolvedAt = Date.now();
+      this.data.files = this.data.files.filter((candidate) => candidate.path !== conflict.path);
+      pruned = true;
+    }
+    if (pruned) {
+      await this.savePluginData();
+    }
+  }
+
   private async refreshMobileOutboxCount(): Promise<void> {
     const snapshots = await Promise.all(this.mobileOutboxes.map((outbox) => outbox.snapshot()));
     this.queuedMobileActions = new Set(
@@ -558,6 +630,7 @@ export default class ObsidianAnkiBridge extends Plugin {
   }
 
   private async runDesktopCatchUp(): Promise<void> {
+    await this.pruneVanishedSourceConflicts();
     await this.processMobileOutbox();
     await this.scanExternalChanges(true);
     await this.auditMovedFiles();
@@ -592,7 +665,11 @@ export default class ObsidianAnkiBridge extends Plugin {
     for (const file of files) {
       // File-sync clients can replace a note without emitting an Obsidian
       // modify event. `read` deliberately bypasses the cachedRead layer.
-      const source = await this.app.vault.read(file);
+      const source = await this.readIfPresent(file, false);
+      if (source === undefined) {
+        await this.handleVanishedSource(file.path, false);
+        continue;
+      }
       const registered = this.data.files.find((candidate) => candidate.path === file.path);
       const needsSync = registered
         ? registered.contentHash !== stableHash(source)
@@ -714,25 +791,27 @@ export default class ObsidianAnkiBridge extends Plugin {
     laterEvents: StoredMobileOutboxEvent[]
   ): Promise<boolean> {
     const { event } = stored;
+    const supersededBy = (path: string): boolean => laterEvents.some(({ event: later }) =>
+      later.type === "delete" && later.path === path ||
+      later.type === "rename" && later.oldPath === path
+    );
     if (event.type === "upsert") {
       const file = this.app.vault.getAbstractFileByPath(event.path);
       if (!(file instanceof TFile) || file.extension !== "md") {
-        return laterEvents.some(({ event: later }) =>
-          later.type === "delete" && later.path === event.path ||
-          later.type === "rename" && later.oldPath === event.path
-        );
+        return supersededBy(event.path);
       }
-      const source = await this.app.vault.read(file);
+      // The vault index can still list a note that a sync client already removed.
+      const source = await this.readIfPresent(file, false);
+      if (source === undefined) {
+        return supersededBy(event.path);
+      }
       return (await this.syncFileGuarded(file, false, source)) !== undefined;
     }
 
     if (event.type === "rename") {
       const file = this.app.vault.getAbstractFileByPath(event.path);
       if (!(file instanceof TFile) || file.extension !== "md") {
-        const superseded = laterEvents.some(({ event: later }) =>
-          later.type === "delete" && later.path === event.path ||
-          later.type === "rename" && later.oldPath === event.path
-        );
+        const superseded = supersededBy(event.path);
         if (superseded) {
           const registered = this.data.files.find((candidate) => candidate.path === event.oldPath);
           if (registered) {
@@ -749,7 +828,10 @@ export default class ObsidianAnkiBridge extends Plugin {
         this.resolveConflict("FILE_MOVE_AMBIGUOUS", event.oldPath);
         await this.savePluginData();
       }
-      const source = await this.app.vault.read(file);
+      const source = await this.readIfPresent(file, false);
+      if (source === undefined) {
+        return supersededBy(event.path);
+      }
       return (await this.syncFileGuarded(file, false, source)) !== undefined;
     }
 
@@ -816,7 +898,10 @@ export default class ObsidianAnkiBridge extends Plugin {
           continue;
         }
         const registered = this.data.files.some((candidate) => candidate.path === file.path);
-        const source = await this.app.vault.cachedRead(file);
+        const source = await this.readIfPresent(file);
+        if (source === undefined) {
+          continue;
+        }
         if (!registered && !containsCanonicalMarker(source)) {
           continue;
         }
@@ -838,7 +923,11 @@ export default class ObsidianAnkiBridge extends Plugin {
         continue;
       }
       const registered = this.data.files.some((candidate) => candidate.path === file.path);
-      const source = await this.app.vault.cachedRead(file);
+      const source = await this.readIfPresent(file);
+      if (source === undefined) {
+        await this.handleVanishedSource(file.path, false);
+        continue;
+      }
       if (!registered && !containsCanonicalMarker(source)) {
         continue;
       }
@@ -865,11 +954,21 @@ export default class ObsidianAnkiBridge extends Plugin {
       await this.queueMobileUpsert(file, manual);
       return emptySummary(file.path);
     }
+    if (sourceOverride === undefined && !(await this.sourceStillExists(file.path))) {
+      await this.handleVanishedSource(file.path, false);
+      return undefined;
+    }
     const current = this.activeSyncs.get(file.path);
     if (current) {
       return current;
     }
     const run = this.syncQueue.then(() => this.syncFile(file, manual, sourceOverride)).catch(async (error: unknown) => {
+      // A note that vanished mid-flight is not a synchronization failure. It is
+      // only worth reporting when registered cards depend on it.
+      if (isMissingFileError(error) && !(await this.sourceStillExists(file.path))) {
+        await this.handleVanishedSource(file.path, false);
+        return undefined;
+      }
       const message = errorMessage(error);
       this.recordConflict("SYNC_FAILED", message, file.path);
       await this.savePluginData();
@@ -1126,8 +1225,9 @@ export default class ObsidianAnkiBridge extends Plugin {
       if (!(oldFile instanceof TFile) || oldFile.extension !== "md") {
         continue;
       }
-      const oldSource = await this.app.vault.read(oldFile);
-      const stillAtOldPath = this.parser.parse(oldSource).some((parsed) =>
+      // A vanished old note cannot still hold the card, so it counts as moved.
+      const oldSource = await this.readIfPresent(oldFile, false);
+      const stillAtOldPath = oldSource !== undefined && this.parser.parse(oldSource).some((parsed) =>
         parsed.kind === candidate.kind && parsed.fingerprint === candidate.fingerprint
       );
       if (!stillAtOldPath) {
@@ -1188,6 +1288,19 @@ export default class ObsidianAnkiBridge extends Plugin {
       return;
     }
     const cards = this.data.cards.filter((candidate) => candidate.fileKey === registered.key);
+    if (cards.length === 0) {
+      // Nothing in Anki depends on this note, so its disappearance is not worth
+      // reporting no matter how it vanished.
+      this.data.files = this.data.files.filter((candidate) => candidate.key !== registered.key);
+      this.resolveConflict("FILE_MISSING", path);
+      this.resolveConflict("FILE_MOVE_AMBIGUOUS", path);
+      this.resolveConflict("SYNC_FAILED", path);
+      await this.savePluginData();
+      if (explicitlyDeletedInObsidian) {
+        new Notice("Anki Bridge: The deleted note had no registered cards.");
+      }
+      return;
+    }
     for (const card of cards) {
       card.status = "missing";
       for (const child of card.children) {
@@ -1212,16 +1325,8 @@ export default class ObsidianAnkiBridge extends Plugin {
           "warning"
         );
       }
-      if (cards.length === 0) {
-        this.data.files = this.data.files.filter((candidate) => candidate.key !== registered.key);
-      }
       await this.savePluginData();
-      new Notice(
-        cards.length === 0
-          ? "Anki Bridge: The deleted note had no registered cards."
-          : `Anki Bridge: ${cards.length} card(s) await deletion confirmation.`,
-        10_000
-      );
+      new Notice(`Anki Bridge: ${cards.length} card(s) await deletion confirmation.`, 10_000);
       return;
     }
 
@@ -1243,9 +1348,23 @@ export default class ObsidianAnkiBridge extends Plugin {
       return;
     }
     const existingPaths = new Set(this.app.vault.getMarkdownFiles().map((file) => file.path));
-    const missing = this.data.files.filter(
+    const vanished = this.data.files.filter(
       (file) => file.missingReason !== "deleted-in-obsidian" && !existingPaths.has(file.path)
     );
+    // Registry entries without cards cannot lose anything in Anki, so they are
+    // forgotten instead of reported as missing sources.
+    const forgotten = forgettableRegistryFiles(this.data.files, this.data.cards, existingPaths);
+    if (forgotten.length > 0) {
+      const forgottenKeys = new Set(forgotten.map((file) => file.key));
+      this.data.files = this.data.files.filter((file) => !forgottenKeys.has(file.key));
+      for (const file of forgotten) {
+        this.resolveConflict("FILE_MISSING", file.path);
+        this.resolveConflict("FILE_MOVE_AMBIGUOUS", file.path);
+        this.resolveConflict("SYNC_FAILED", file.path);
+      }
+      await this.savePluginData();
+    }
+    const missing = vanished.filter((file) => !forgotten.includes(file));
     if (missing.length === 0) {
       if (manual) {
         new Notice("Path audit complete: no ambiguous missing or moved source notes.");
@@ -1256,7 +1375,11 @@ export default class ObsidianAnkiBridge extends Plugin {
     const candidates = this.app.vault.getMarkdownFiles().filter((file) => !registeredPaths.has(file.path));
     const candidateHashes = new Map<string, TFile[]>();
     for (const candidate of candidates) {
-      const hash = stableHash(await this.app.vault.cachedRead(candidate));
+      const content = await this.readIfPresent(candidate);
+      if (content === undefined) {
+        continue;
+      }
+      const hash = stableHash(content);
       const bucket = candidateHashes.get(hash) ?? [];
       bucket.push(candidate);
       candidateHashes.set(hash, bucket);

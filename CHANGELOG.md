@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.3.2 - PDF viewer and vanished note fixes
+
+- Fixed Obsidian's built-in PDF viewer staying blank while the plugin was
+  enabled. The bundled pdf.js copy is now loaded only when a PDF card is
+  actually rendered, and the `pdfjsLib`, `pdfjsWorker`, and
+  `_pdfjsTestingUtils` globals Obsidian relies on are restored immediately
+  afterwards, so embedded and tabbed PDFs render normally again.
+- Stopped reporting read failures for notes that disappeared outside Obsidian
+  without ever holding cards. A pending synchronization is now cancelled when a
+  note is deleted, and a vanished note is only reported when registered Anki
+  cards still depend on it.
+- Cleared the stale `SYNC_FAILED` entries that earlier versions left in the
+  conflict report for such notes; they are resolved automatically on the next
+  desktop start.
+- Made vault scans, the path audit, and the mobile outbox skip notes that
+  vanished mid-run instead of aborting the whole pass.
+
 ## 1.3.1 - Community review fixes
 
 - Replaced the source-filter HTML heading with Obsidian's `Setting` heading

@@ -1,7 +1,6 @@
 import { Component, MarkdownRenderer, type App } from "obsidian";
 import { toPng } from "html-to-image";
-import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
-import "pdfjs-dist/legacy/build/pdf.worker.mjs";
+import type { PDFWorker } from "pdfjs-dist/legacy/build/pdf.mjs";
 
 export interface RenderedVisual {
   data: string;
@@ -16,6 +15,83 @@ export interface VisualRenderer {
 
 const CAPTURE_WIDTH = 760;
 const CAPTURE_TIMEOUT_MS = 4_000;
+
+// Obsidian ships its own pdf.js and drives the built-in PDF viewer through the
+// `pdfjsLib` and `pdfjsWorker` globals. The bundled pdfjs-dist build assigns
+// both unconditionally while its module body runs, so importing it eagerly
+// replaced Obsidian's viewer with an incompatible copy and every embedded or
+// tabbed PDF stayed blank. pdf.js is therefore loaded on demand and every
+// global it touches is restored right afterwards.
+const PDFJS_GLOBALS = ["pdfjsLib", "pdfjsWorker", "_pdfjsTestingUtils"] as const;
+
+type PdfjsApi = typeof import("pdfjs-dist/legacy/build/pdf.mjs");
+
+interface PdfjsBundle {
+  api: PdfjsApi;
+  workerMessageHandler: unknown;
+}
+
+interface GlobalSnapshot {
+  key: string;
+  present: boolean;
+  value: unknown;
+}
+
+let pdfjsBundle: Promise<PdfjsBundle> | undefined;
+
+function captureGlobals(keys: readonly string[]): GlobalSnapshot[] {
+  const globals = globalThis as Record<string, unknown>;
+  return keys.map((key) => ({ key, present: key in globals, value: globals[key] }));
+}
+
+function restoreGlobals(snapshot: readonly GlobalSnapshot[]): void {
+  const globals = globalThis as Record<string, unknown>;
+  for (const { key, present, value } of snapshot) {
+    if (present) {
+      globals[key] = value;
+    } else {
+      delete globals[key];
+    }
+  }
+}
+
+async function loadPdfjs(): Promise<PdfjsBundle> {
+  if (!pdfjsBundle) {
+    const pending = (async (): Promise<PdfjsBundle> => {
+      const snapshot = captureGlobals(PDFJS_GLOBALS);
+      try {
+        const [api, worker] = await Promise.all([
+          import("pdfjs-dist/legacy/build/pdf.mjs"),
+          import("pdfjs-dist/legacy/build/pdf.worker.mjs")
+        ]);
+        return { api, workerMessageHandler: worker.WorkerMessageHandler };
+      } finally {
+        restoreGlobals(snapshot);
+      }
+    })();
+    pdfjsBundle = pending;
+    pending.catch(() => {
+      if (pdfjsBundle === pending) {
+        pdfjsBundle = undefined;
+      }
+    });
+  }
+  return pdfjsBundle;
+}
+
+// pdf.js resolves its main-thread worker from `globalThis.pdfjsWorker` while the
+// PDFWorker is constructed. The global is installed for that synchronous window
+// only, so Obsidian's own handler stays in place for its viewer.
+function createIsolatedWorker({ api, workerMessageHandler }: PdfjsBundle): PDFWorker {
+  const globals = globalThis as Record<string, unknown>;
+  const snapshot = captureGlobals(["pdfjsWorker"]);
+  globals.pdfjsWorker = { WorkerMessageHandler: workerMessageHandler };
+  try {
+    return new api.PDFWorker();
+  } finally {
+    restoreGlobals(snapshot);
+  }
+}
 
 export class ObsidianVisualRenderer implements VisualRenderer {
   constructor(private readonly app: App) {}
@@ -60,8 +136,11 @@ export class ObsidianVisualRenderer implements VisualRenderer {
   }
 
   async renderPdf(data: ArrayBuffer): Promise<RenderedVisual> {
-    const task = getDocument({
+    const bundle = await loadPdfjs();
+    const worker = createIsolatedWorker(bundle);
+    const task = bundle.api.getDocument({
       data: new Uint8Array(data),
+      worker,
       isEvalSupported: false,
       useSystemFonts: true
     });
@@ -85,6 +164,8 @@ export class ObsidianVisualRenderer implements VisualRenderer {
       return { data: dataUrl.slice(dataUrl.indexOf(",") + 1), extension: "png" };
     } finally {
       await task.destroy();
+      // `getDocument` only owns the worker it creates itself.
+      worker.destroy();
     }
   }
 
