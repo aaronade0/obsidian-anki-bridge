@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { noteBelongsToCardKey, ownershipTag, type OwnedNoteInfo } from "../src/ownership";
+import type { App } from "obsidian";
+import { renderForAnki, type MediaStore } from "../src/render";
 import { fileHref, renderContext, sourceHref } from "../src/source-link";
+import type { VisualRenderer } from "../src/visual-renderer";
+import { TFile } from "./stubs/obsidian";
 
 describe("Anki source context", () => {
   it("makes only the note name the Obsidian link", () => {
@@ -64,5 +68,97 @@ describe("Anki source context", () => {
     expect(noteBelongsToCardKey(standard, "card_123")).toBe(true);
     expect(noteBelongsToCardKey(native, "card_123")).toBe(true);
     expect(noteBelongsToCardKey(native, "card_other")).toBe(false);
+  });
+});
+
+describe("PDF embeds", () => {
+  const pdfFile = new TFile("School/Elementares Rechnen Mengen und Zahlen.pdf");
+
+  function harness(): { app: App; mediaStore: MediaStore; calls: (number | undefined)[]; renderer: VisualRenderer } {
+    const calls: (number | undefined)[] = [];
+    const app = {
+      metadataCache: {
+        getFirstLinkpathDest: (linkpath: string) =>
+          linkpath.trim() === "Elementares Rechnen Mengen und Zahlen.pdf" ? pdfFile : null
+      },
+      vault: { readBinary: async () => new ArrayBuffer(8) }
+    } as unknown as App;
+    const mediaStore: MediaStore = { storeMediaFile: async (filename) => filename };
+    const renderer = {
+      renderMarkdown: async () => undefined,
+      renderCanvas: () => ({ data: "", extension: "svg" as const }),
+      renderPdf: async (_data: ArrayBuffer, page?: number) => {
+        calls.push(page);
+        return { data: `page-${page ?? 1}`, extension: "png" as const, page: Math.min(page ?? 1, 20) };
+      }
+    } satisfies VisualRenderer;
+    return { app, mediaStore, calls, renderer };
+  }
+
+  it("renders the page requested by the wiki embed", async () => {
+    const { app, mediaStore, calls, renderer } = harness();
+
+    const result = await renderForAnki(
+      app,
+      mediaStore,
+      "School/Rechnen.md",
+      "![[Elementares Rechnen Mengen und Zahlen.pdf#page=16]]",
+      renderer,
+      { vaultName: "My Vault", sourceHref: sourceHref("My Vault", "card_1") }
+    );
+
+    expect(calls).toEqual([16]);
+    expect(result.warnings).toEqual([]);
+    expect(result.html).toContain("PDF page 16");
+    expect(result.html).toContain("%23page%3D16");
+  });
+
+  it("renders the page requested by a Markdown image embed", async () => {
+    const { app, mediaStore, calls, renderer } = harness();
+
+    await renderForAnki(
+      app,
+      mediaStore,
+      "School/Rechnen.md",
+      "![](Elementares%20Rechnen%20Mengen%20und%20Zahlen.pdf#page=4)",
+      renderer,
+      { vaultName: "My Vault", sourceHref: sourceHref("My Vault", "card_1") }
+    );
+
+    expect(calls).toEqual([4]);
+  });
+
+  it("keeps the first page when the embed names none", async () => {
+    const { app, mediaStore, calls, renderer } = harness();
+
+    const result = await renderForAnki(
+      app,
+      mediaStore,
+      "School/Rechnen.md",
+      "![[Elementares Rechnen Mengen und Zahlen.pdf]]",
+      renderer,
+      { vaultName: "My Vault", sourceHref: sourceHref("My Vault", "card_1") }
+    );
+
+    expect(calls).toEqual([undefined]);
+    expect(result.html).toContain(">PDF</a>");
+    expect(result.html).not.toContain("%23page");
+  });
+
+  it("warns when the requested page does not exist", async () => {
+    const { app, mediaStore, renderer } = harness();
+
+    const result = await renderForAnki(
+      app,
+      mediaStore,
+      "School/Rechnen.md",
+      "![[Elementares Rechnen Mengen und Zahlen.pdf#page=99]]",
+      renderer,
+      { vaultName: "My Vault", sourceHref: sourceHref("My Vault", "card_1") }
+    );
+
+    expect(result.warnings).toEqual([
+      "Elementares Rechnen Mengen und Zahlen.pdf has no page 99; page 20 was used instead."
+    ]);
   });
 });

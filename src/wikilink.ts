@@ -48,6 +48,20 @@ export function parseWikiLink(inner: string): WikiLink | undefined {
   };
 }
 
+/**
+ * Reads the page Obsidian would open for a PDF embed. Obsidian writes the page
+ * as `#page=16` and may append further viewer parameters such as
+ * `#page=16&height=400`, so only the `page` parameter is taken.
+ */
+export function pdfPageFromSubpath(subpath: string): number | undefined {
+  const match = /(?:^|[#&])page=(\d+)/i.exec(subpath);
+  if (!match) {
+    return undefined;
+  }
+  const page = Number.parseInt(match[1] ?? "", 10);
+  return page >= 1 ? page : undefined;
+}
+
 function defaultDisplay(linkpath: string, subpath: string): string {
   const anchor = subpath.replace(/^#/, "").trim();
   if (!anchor) {

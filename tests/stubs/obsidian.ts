@@ -3,12 +3,14 @@
 
 export class TFile {
   path: string;
+  name: string;
   basename: string;
   extension: string;
 
   constructor(path: string) {
     this.path = path;
     const name = path.split("/").pop() ?? path;
+    this.name = name;
     const dot = name.lastIndexOf(".");
     this.basename = dot > 0 ? name.slice(0, dot) : name;
     this.extension = dot > 0 ? name.slice(dot + 1) : "";

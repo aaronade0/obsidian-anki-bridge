@@ -5,7 +5,7 @@ import { linkAnchor, type VaultLinkContext } from "./link-render";
 import { mathJaxForAnki, replaceObsidianMath } from "./math";
 import { escapeHtml, fileHref } from "./source-link";
 import { isVisualCodeLanguage, type RenderedVisual, type VisualRenderer } from "./visual-renderer";
-import { replaceInternalLinks } from "./wikilink";
+import { pdfPageFromSubpath, replaceInternalLinks } from "./wikilink";
 
 export interface MediaStore {
   storeMediaFile(filename: string, data: string): Promise<string>;
@@ -24,7 +24,7 @@ export interface RenderLinkContext {
 }
 
 const markdown = new MarkdownIt({ html: false, linkify: true, breaks: true });
-const WIKI_EMBED_PATTERN = /!\[\[([^\]|#]+)(?:#[^\]|]+)?(?:\|[^\]]+)?\]\]/g;
+const WIKI_EMBED_PATTERN = /!\[\[([^\]|#]+)(#[^\]|]+)?(?:\|[^\]]+)?\]\]/g;
 const MARKDOWN_IMAGE_PATTERN = /!\[([^\]]*)\]\((?:<([^>]+)>|([^\s)]+))(?:\s+["'][^"']*["'])?\)/g;
 const FENCED_BLOCK_PATTERN = /^(`{3,}|~{3,})\s*([^\n]*)\n[\s\S]*?^\1[ \t]*$/gm;
 const DIRECT_IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "avif"]);
@@ -90,7 +90,9 @@ export async function renderForAnki(
       sourcePath,
       target,
       warnings,
-      links
+      links,
+      undefined,
+      match[2] ?? ""
     ));
   });
 
@@ -99,12 +101,17 @@ export async function renderForAnki(
     if (/^(?:https?:|data:)/i.test(rawTarget)) {
       return match[0];
     }
-    let target = rawTarget;
+    let decoded = rawTarget;
     try {
-      target = decodeURIComponent(rawTarget);
+      decoded = decodeURIComponent(rawTarget);
     } catch {
       // Keep the literal target if it is not valid URI encoding.
     }
+    // `![](file.pdf#page=16)` carries the viewer parameters in the same target,
+    // and Obsidian's resolver only understands the path in front of them.
+    const hashIndex = decoded.indexOf("#");
+    const target = hashIndex >= 0 ? decoded.slice(0, hashIndex) : decoded;
+    const subpath = hashIndex >= 0 ? decoded.slice(hashIndex) : "";
     const file = app.metadataCache.getFirstLinkpathDest(target, sourcePath);
     return inject(await renderEmbeddedFile(
       app,
@@ -116,7 +123,8 @@ export async function renderForAnki(
       target,
       warnings,
       links,
-      match[1]
+      match[1],
+      subpath
     ));
   });
 
@@ -148,7 +156,8 @@ async function renderEmbeddedFile(
   target: string,
   warnings: string[],
   links?: RenderLinkContext,
-  requestedAlt?: string
+  requestedAlt?: string,
+  subpath = ""
 ): Promise<string> {
   if (!(file instanceof TFile)) {
     warnings.push(`Embedded file not found: ${target}`);
@@ -175,11 +184,24 @@ async function renderEmbeddedFile(
     const encoded = arrayBufferToBase64(binary);
     const pdfFilename = `oab-${stableHash(encoded)}.pdf`;
     await mediaStore.storeMediaFile(pdfFilename, encoded);
+    const requestedPage = pdfPageFromSubpath(subpath);
     if (visualRenderer) {
       try {
-        const preview = await visualRenderer.renderPdf(binary);
-        const previewHtml = await storeVisual(mediaStore, preview, file.basename);
-        return `<figure class="oab-document">${linkVisual(previewHtml, href)}<figcaption>${sourceFileLink(href, file.basename)} · <a href="${escapeHtml(pdfFilename)}">PDF</a></figcaption></figure>`;
+        const preview = await visualRenderer.renderPdf(binary, requestedPage);
+        if (requestedPage !== undefined && preview.page !== undefined && preview.page !== requestedPage) {
+          warnings.push(`${file.name} has no page ${requestedPage}; page ${preview.page} was used instead.`);
+        }
+        const label = preview.page !== undefined && preview.page > 1
+          ? `${file.basename} (page ${preview.page})`
+          : file.basename;
+        const previewHtml = await storeVisual(mediaStore, preview, label);
+        const pdfLabel = preview.page !== undefined && preview.page > 1 ? `PDF page ${preview.page}` : "PDF";
+        // Obsidian expects the subpath inside the encoded `file` parameter, so
+        // the page has to be part of the path handed to `fileHref`.
+        const pageHref = links && preview.page !== undefined && preview.page > 1
+          ? fileHref(links.vaultName, `${file.path}#page=${preview.page}`)
+          : href;
+        return `<figure class="oab-document">${linkVisual(previewHtml, pageHref)}<figcaption>${sourceFileLink(pageHref, file.basename)} · <a href="${escapeHtml(pdfFilename)}">${escapeHtml(pdfLabel)}</a></figcaption></figure>`;
       } catch (error) {
         warnings.push(`Could not render a preview of ${file.name}: ${errorMessage(error)}`);
       }

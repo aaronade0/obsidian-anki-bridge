@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { linkAnchor, renderLinkedText, type VaultLinkContext } from "../src/link-render";
 import { renderContext, sourceHref, vaultLinkHref } from "../src/source-link";
-import { describeEmbeds, parseWikiLink, replaceInternalLinks, stripLinkSyntax } from "../src/wikilink";
+import {
+  describeEmbeds,
+  parseWikiLink,
+  pdfPageFromSubpath,
+  replaceInternalLinks,
+  stripLinkSyntax
+} from "../src/wikilink";
 
 const context: VaultLinkContext = {
   vaultName: "My Vault",
@@ -112,5 +118,24 @@ describe("Obsidian links on cards", () => {
 
     expect(html).toContain('<span class="context-label">Umwandlung in <a class="oab-link"');
     expect(html).toContain(">Energie</a></span>");
+  });
+});
+
+describe("PDF page subpaths", () => {
+  it("reads the page Obsidian encodes in the embed", () => {
+    expect(pdfPageFromSubpath("#page=16")).toBe(16);
+    expect(pdfPageFromSubpath(parseWikiLink("Rechnen.pdf#page=16")?.subpath ?? "")).toBe(16);
+  });
+
+  it("ignores other viewer parameters", () => {
+    expect(pdfPageFromSubpath("#height=400&page=7")).toBe(7);
+    expect(pdfPageFromSubpath("#page=3&height=400")).toBe(3);
+  });
+
+  it("returns nothing without a usable page", () => {
+    expect(pdfPageFromSubpath("")).toBeUndefined();
+    expect(pdfPageFromSubpath("#Heading")).toBeUndefined();
+    expect(pdfPageFromSubpath("#page=0")).toBeUndefined();
+    expect(pdfPageFromSubpath("#subpage=4")).toBeUndefined();
   });
 });

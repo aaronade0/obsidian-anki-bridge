@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.3.4 - PDF embeds keep their page
+
+- Fixed PDF embeds always showing the first page. `![[Script.pdf#page=16]]`
+  and `![](Script.pdf#page=16)` now render the page the embed asks for, so
+  image occlusion cards built from a PDF page show that page.
+- Linked the PDF caption of such a card to the same page in Obsidian and
+  labelled it with the page number.
+- Reported a warning instead of a silently different image when the embed asks
+  for a page the PDF does not have.
+- Recorded the missing `1.3.3` entry in `versions.json`.
+
 ## 1.3.2 - PDF viewer and vanished note fixes
 
 - Fixed Obsidian's built-in PDF viewer staying blank while the plugin was

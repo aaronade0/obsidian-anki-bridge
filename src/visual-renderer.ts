@@ -5,11 +5,13 @@ import type { PDFWorker } from "pdfjs-dist/legacy/build/pdf.mjs";
 export interface RenderedVisual {
   data: string;
   extension: "png" | "svg";
+  /** Page that was rendered, for PDFs only. */
+  page?: number;
 }
 
 export interface VisualRenderer {
   renderMarkdown(markdown: string, sourcePath: string): Promise<RenderedVisual | undefined>;
-  renderPdf(data: ArrayBuffer): Promise<RenderedVisual>;
+  renderPdf(data: ArrayBuffer, page?: number): Promise<RenderedVisual>;
   renderCanvas(source: string): RenderedVisual;
 }
 
@@ -135,7 +137,7 @@ export class ObsidianVisualRenderer implements VisualRenderer {
     }
   }
 
-  async renderPdf(data: ArrayBuffer): Promise<RenderedVisual> {
+  async renderPdf(data: ArrayBuffer, page?: number): Promise<RenderedVisual> {
     const bundle = await loadPdfjs();
     const worker = createIsolatedWorker(bundle);
     const task = bundle.api.getDocument({
@@ -146,10 +148,11 @@ export class ObsidianVisualRenderer implements VisualRenderer {
     });
     try {
       const document = await task.promise;
-      const page = await document.getPage(1);
-      const initial = page.getViewport({ scale: 1 });
+      const pageNumber = Math.min(Math.max(1, page ?? 1), document.numPages);
+      const pdfPage = await document.getPage(pageNumber);
+      const initial = pdfPage.getViewport({ scale: 1 });
       const scale = Math.min(2, 1200 / Math.max(1, initial.width));
-      const viewport = page.getViewport({ scale });
+      const viewport = pdfPage.getViewport({ scale });
       const canvas = createEl("canvas");
       canvas.width = Math.ceil(viewport.width);
       canvas.height = Math.ceil(viewport.height);
@@ -157,11 +160,11 @@ export class ObsidianVisualRenderer implements VisualRenderer {
       if (!context) {
         throw new Error("Canvas rendering is unavailable.");
       }
-      await page.render({ canvas, canvasContext: context, viewport }).promise;
+      await pdfPage.render({ canvas, canvasContext: context, viewport }).promise;
       const dataUrl = canvas.toDataURL("image/png");
-      page.cleanup();
+      pdfPage.cleanup();
       await document.destroy();
-      return { data: dataUrl.slice(dataUrl.indexOf(",") + 1), extension: "png" };
+      return { data: dataUrl.slice(dataUrl.indexOf(",") + 1), extension: "png", page: pageNumber };
     } finally {
       await task.destroy();
       // `getDocument` only owns the worker it creates itself.
