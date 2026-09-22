@@ -300,10 +300,34 @@ captions link to the embedded source file.
 If a visual cannot be rendered, synchronization records a visible warning and
 keeps an explanatory placeholder instead of silently dropping the content.
 
-## Priorities
+## Tags
 
-Append `#prio1`, `#prio2`, `#prio3`, or `#prio4` to a card. The bridge adds the
-corresponding priority tag in Anki. Tags added manually in Anki are preserved.
+Every Obsidian tag written on a line that belongs to a card becomes a tag of
+that card in Anki. That includes a tag before the opening marker, a tag on any
+line inside a List or Dump block, and a tag after the closing marker:
+
+```markdown
+#### [[Sinus]] #prio3 ⇢{%%oab:dump:v1%%
+![[Sketch.png]]
+}⇠%%oab:end:v1%%
+
+[[Cosinus]] ⇢{%%oab:dump:v1%%
+![[Sketch.png]]
+#prio3
+}⇠%%oab:end:v1%%
+
+[[Tangens]] ⇢{%%oab:dump:v1%%
+![[Sketch.png]]
+}⇠%%oab:end:v1%% #prio3
+```
+
+Tags that trail a card's text, and lines that hold nothing but tags, are kept
+out of the card content. Nested Obsidian tags map onto Anki's nesting, so
+`#schule/mathe` becomes `schule::mathe`. In a List card each item additionally
+receives the tags of its own line.
+
+Markdown is the source of truth for a bridged card, so a tag removed in
+Obsidian is removed in Anki on the next synchronization.
 
 ## Links back to Obsidian
 

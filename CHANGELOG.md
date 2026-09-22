@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.4.0 - Tags from every card line
+
+- Every Obsidian tag written on a line that belongs to a card is now added to
+  that card in Anki: before the opening marker, on any line inside a List or
+  Dump block, and after the closing marker. Previously only a trailing
+  `#prio1`-`#prio4` was recognized, so a tag in the other two positions was
+  silently dropped and could leave an outdated tag in Anki.
+- Stopped duplicating priorities as `oab-prio<n>`; only the tag written in the
+  note is synchronized.
+- Made Markdown the source of truth for a bridged card's tags. A tag removed in
+  Obsidian is now removed in Anki instead of lingering.
+- Mapped nested Obsidian tags onto Anki nesting (`#schule/mathe` becomes
+  `schule::mathe`), and gave each List item the tags of its own line.
+- Kept trailing tags and tag-only lines out of the card content.
+- Fixed the editor highlight inserting apparent blank space and repeated
+  rounded corners around `[`, `]`, links, embeds, and tags. The highlight now
+  runs seamlessly to the end of a card and changes no spacing.
+
 ## 1.3.4 - PDF embeds keep their page
 
 - Fixed PDF embeds always showing the first page. `![[Script.pdf#page=16]]`

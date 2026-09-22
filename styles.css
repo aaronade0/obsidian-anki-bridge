@@ -1,9 +1,15 @@
+/*
+ * CodeMirror splits a card highlight into one span per overlapping decoration
+ * (links, embeds, tags, line wraps). Horizontal padding and rounded corners
+ * would then repeat at every split and read as inserted whitespace, so the
+ * highlight stays a flat, seamless background that changes no spacing.
+ */
 .oab-card-field {
   background: color-mix(in srgb, var(--background-modifier-border) 52%, transparent);
-  border-radius: var(--radius-s);
+  border-radius: 0;
   box-decoration-break: clone;
   -webkit-box-decoration-break: clone;
-  padding: 0.08em 0.18em;
+  padding: 0;
 }
 
 .oab-card-front {

@@ -1,7 +1,5 @@
 export type CardKind = "basic" | "reverse" | "cloze" | "list" | "dump" | "image-occlusion";
 
-export type Priority = 1 | 2 | 3 | 4;
-
 export interface TextRange {
   from: number;
   to: number;
@@ -21,7 +19,10 @@ export interface ParsedCard {
   front: string;
   back: string;
   items: string[];
-  priority?: Priority;
+  /** Every Obsidian tag written on a line that belongs to this card. */
+  tags: string[];
+  /** Tags of each list item, aligned with `items`. */
+  itemTags: string[][];
   headingPath: string[];
   listContext: string[];
   fingerprint: string;

@@ -16,8 +16,8 @@ describe("FlashcardParser", () => {
     ].join("\n"));
 
     expect(cards.map(({ kind }) => kind)).toEqual(["basic", "reverse", "cloze"]);
-    expect(cards[0]).toMatchObject({ front: "Front", back: "Back", priority: 1 });
-    expect(cards[1]).toMatchObject({ front: "Term", back: "Definition", priority: 2 });
+    expect(cards[0]).toMatchObject({ front: "Front", back: "Back", tags: ["prio1"] });
+    expect(cards[1]).toMatchObject({ front: "Term", back: "Definition", tags: ["prio2"] });
     expect(cards[2]?.front).toBe("Capital: {{c1::Berlin}}");
   });
 
@@ -38,7 +38,7 @@ describe("FlashcardParser", () => {
     expect(card).toMatchObject({
       kind: "list",
       front: "Name the laws",
-      priority: 1,
+      tags: ["prio1"],
       headingPath: ["Mechanics", "Newton"]
     });
     expect(card?.items).toHaveLength(3);

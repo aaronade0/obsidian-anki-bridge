@@ -175,15 +175,35 @@ export class AnkiConnectClient {
 
   async updateNote(noteId: number, fields: Record<string, string>, tags: string[]): Promise<void> {
     await this.invoke("updateNoteFields", { note: { id: noteId, fields } });
-    await this.invoke("removeTags", { notes: [noteId], tags: "prio1 prio2 prio3 prio4 oab-prio1 oab-prio2 oab-prio3 oab-prio4" });
-    if (tags.length > 0) {
-      await this.invoke("addTags", { notes: [noteId], tags: tags.join(" ") });
+    await this.replaceNoteTags(noteId, tags);
+  }
+
+  /**
+   * Markdown is the single source of truth for a bridged card, so its Anki
+   * tags mirror the note exactly. A tag deleted in Obsidian therefore
+   * disappears in Anki instead of lingering as a stale leftover.
+   */
+  private async replaceNoteTags(noteId: number, tags: string[]): Promise<void> {
+    const desired = [...new Set(tags)];
+    try {
+      await this.invoke("updateNoteTags", { note: noteId, tags: desired });
+      return;
+    } catch {
+      // Older AnkiConnect builds lack updateNoteTags; fall back to a diff.
+    }
+    const existing = (await this.noteInfo(noteId))?.tags ?? [];
+    const obsolete = existing.filter((tag) => tag.trim() && !desired.includes(tag));
+    if (obsolete.length > 0) {
+      await this.invoke("removeTags", { notes: [noteId], tags: obsolete.join(" ") });
+    }
+    const missing = desired.filter((tag) => !existing.includes(tag));
+    if (missing.length > 0) {
+      await this.invoke("addTags", { notes: [noteId], tags: missing.join(" ") });
     }
   }
 
-  async migrateNoteModel(noteId: number, note: AnkiNoteInput, existingTags: string[]): Promise<void> {
-    const retainedTags = existingTags.filter((tag) => !/^(?:prio|oab-prio)[1-4]$/.test(tag));
-    const tags = [...new Set([...retainedTags, ...note.tags])];
+  async migrateNoteModel(noteId: number, note: AnkiNoteInput, _existingTags: string[]): Promise<void> {
+    const tags = [...new Set(note.tags)];
     try {
       await this.invoke("updateNoteModel", {
         note: {

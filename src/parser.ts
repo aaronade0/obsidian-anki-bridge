@@ -1,6 +1,13 @@
 import { normalizeForFingerprint, stableHash } from "./hash";
 import { inlineCodeRanges, offsetInsideRanges } from "./inline-code";
-import type { CardKind, ParsedCard, Priority, TextRange } from "./types";
+import {
+  collectTags,
+  isOnlyTags,
+  mergeTags,
+  stripTrailingTags,
+  trailingTagMatch
+} from "./tags";
+import type { CardKind, ParsedCard, TextRange } from "./types";
 import { describeEmbeds } from "./wikilink";
 
 interface SourceLine {
@@ -10,9 +17,9 @@ interface SourceLine {
   text: string;
 }
 
-interface PriorityResult {
+interface TagResult {
   value: string;
-  priority?: Priority;
+  tags: string[];
 }
 
 interface CardLineContent {
@@ -20,8 +27,6 @@ interface CardLineContent {
   from: number;
   isListItem: boolean;
 }
-
-const PRIORITY_PATTERN = /(?:^|\s)#prio([1-4])\s*$/i;
 export const BASIC_MARKER = "⇢%%oab:basic:v1%%";
 export const REVERSE_MARKER = "⇄%%oab:reverse:v1%%";
 export const LIST_START_MARKER = "⇢[%%oab:list:v1%%";
@@ -34,9 +39,9 @@ export const CLOZE_CLOSE_MARKER = "⟧%%oab:end:v1%%";
 
 const CANONICAL_MARKER_FRAGMENT = "%%oab:";
 
-const LIST_START_PATTERN = /^(.*?)\s*⇢\[%%oab:list:v1%%\s*(?:#prio([1-4]))?\s*$/i;
-const DUMP_START_PATTERN = /^(.*?)\s*⇢\{%%oab:dump:v1%%\s*(?:#prio([1-4]))?\s*$/i;
-const IMAGE_PATTERN = /^(.*?)\s*⇢▣%%oab:image:v1%%\s*(.*?)\s*(?:#prio([1-4]))?\s*$/i;
+const LIST_START_PATTERN = /^(.*?)\s*⇢\[%%oab:list:v1%%\s*(.*?)\s*$/;
+const DUMP_START_PATTERN = /^(.*?)\s*⇢\{%%oab:dump:v1%%\s*(.*?)\s*$/;
+const IMAGE_PATTERN = /^(.*?)\s*⇢▣%%oab:image:v1%%\s*(.*?)\s*$/;
 const HEADING_PATTERN = /^(#{1,6})\s+(.+?)\s*#*\s*$/;
 const FENCE_PATTERN = /^\s*(`{3,}|~{3,})/;
 const LIST_ITEM_PATTERN = /^(\s*)(?:[-*+]|\d+[.)])\s+(.+)$/;
@@ -90,16 +95,15 @@ export class FlashcardParser {
       const cardLine = cardLineContent(line);
 
       const listStart = markerIsActive(cardLine.text, LIST_START_MARKER)
-        ? cardLine.text.match(LIST_START_PATTERN)
-        : null;
+        ? blockStartMatch(cardLine.text, LIST_START_PATTERN)
+        : undefined;
       if (listStart) {
         const endIndex = findBlockEnd(lines, index + 1, LIST_END_MARKER);
         if (endIndex !== -1) {
-          const front = listStart[1]?.trim() ?? "";
+          const front = listStart.front;
           const blockLines = lines.slice(index + 1, endIndex);
           const itemResult = parseListItems(blockLines);
-          const closingPriority = stripPriority(lines[endIndex]?.text.replace(LIST_END_MARKER, "") ?? "").priority;
-          const priority = parsePriority(listStart[2]) ?? closingPriority;
+          const tags = mergeTags(listStart.tags, closingLineTags(lines[endIndex], LIST_END_MARKER));
           cards.push(
             makeCard({
               ordinal: cards.length,
@@ -107,16 +111,14 @@ export class FlashcardParser {
               front,
               back: "",
               items: itemResult.items,
-              priority,
+              tags,
+              itemTags: itemResult.itemTags,
               headings,
               listContext: listContexts.get(line.number) ?? [],
               start: line,
               end: lines[endIndex] ?? line,
               marker: markerRange(line, LIST_START_MARKER),
-              frontRange: {
-                from: cardLine.from,
-                to: cardLine.from + Math.max(0, cardLine.text.indexOf(LIST_START_MARKER))
-              },
+              frontRange: blockFrontRange(cardLine, LIST_START_MARKER),
               backRange: blockRange(blockLines),
               itemRanges: itemResult.ranges
             })
@@ -134,31 +136,31 @@ export class FlashcardParser {
       }
 
       const dumpStart = markerIsActive(cardLine.text, DUMP_START_MARKER)
-        ? cardLine.text.match(DUMP_START_PATTERN)
-        : null;
+        ? blockStartMatch(cardLine.text, DUMP_START_PATTERN)
+        : undefined;
       if (dumpStart) {
         const endIndex = findBlockEnd(lines, index + 1, DUMP_END_MARKER);
         if (endIndex !== -1) {
           const bodyLines = lines.slice(index + 1, endIndex);
-          const closingPriority = stripPriority(lines[endIndex]?.text.replace(DUMP_END_MARKER, "") ?? "").priority;
-          const priority = parsePriority(dumpStart[2]) ?? closingPriority;
+          const body = parseDumpBody(bodyLines);
           cards.push(
             makeCard({
               ordinal: cards.length,
               kind: "dump",
-              front: dumpStart[1]?.trim() ?? "",
-              back: bodyLines.map((bodyLine) => bodyLine.text).join("\n").trim(),
+              front: dumpStart.front,
+              back: body.value,
               items: [],
-              priority,
+              tags: mergeTags(
+                dumpStart.tags,
+                body.tags,
+                closingLineTags(lines[endIndex], DUMP_END_MARKER)
+              ),
               headings,
               listContext: listContexts.get(line.number) ?? [],
               start: line,
               end: lines[endIndex] ?? line,
               marker: markerRange(line, DUMP_START_MARKER),
-              frontRange: {
-                from: cardLine.from,
-                to: cardLine.from + Math.max(0, cardLine.text.indexOf(DUMP_START_MARKER))
-              },
+              frontRange: blockFrontRange(cardLine, DUMP_START_MARKER),
               backRange: blockRange(bodyLines)
             })
           );
@@ -189,7 +191,8 @@ interface MakeCardInput {
   front: string;
   back: string;
   items: string[];
-  priority?: Priority;
+  tags?: string[];
+  itemTags?: string[][];
   headings: string[];
   listContext: string[];
   start: SourceLine;
@@ -213,7 +216,8 @@ function makeCard(input: MakeCardInput): ParsedCard {
     front: input.front,
     back: input.back,
     items: input.items,
-    priority: input.priority,
+    tags: [...(input.tags ?? [])],
+    itemTags: (input.itemTags ?? []).map((tags) => [...tags]),
     headingPath: [...input.headings],
     listContext: [...input.listContext],
     fingerprint: stableHash(normalized),
@@ -236,20 +240,19 @@ function inlineCard(
   marker: string,
   front: string,
   back: string,
-  priority: Priority | undefined,
   headings: string[],
   listContext: string[],
   content: CardLineContent
 ): ParsedCard {
   const markerIndex = content.text.indexOf(marker);
-  const priorityIndex = content.text.search(PRIORITY_PATTERN);
+  const trailingTags = trailingTagMatch(content.text);
   return makeCard({
     ordinal,
     kind,
     front,
     back,
     items: [],
-    priority,
+    tags: collectTags(content.text),
     headings,
     listContext,
     start: line,
@@ -258,7 +261,7 @@ function inlineCard(
     frontRange: { from: content.from, to: content.from + markerIndex },
     backRange: {
       from: content.from + markerIndex + marker.length,
-      to: priorityIndex >= 0 ? content.from + priorityIndex : line.to
+      to: trailingTags ? content.from + trailingTags.index : line.to
     }
   });
 }
@@ -273,34 +276,36 @@ function parseInlineCard(
   const imageMatch = markerIsActive(content.text, IMAGE_MARKER)
     ? content.text.match(IMAGE_PATTERN)
     : null;
-  if (imageMatch && (imageMatch[1]?.trim() || imageMatch[2]?.trim())) {
-    return inlineCard(
-      ordinal,
-      "image-occlusion",
-      line,
-      IMAGE_MARKER,
-      imageMatch[1]?.trim() ?? "",
-      imageMatch[2]?.trim() ?? "",
-      parsePriority(imageMatch[3]),
-      headings,
-      listContext,
-      content
-    );
+  if (imageMatch) {
+    const imageFront = stripTrailingTags(imageMatch[1] ?? "").value;
+    const imageBack = stripTrailingTags(imageMatch[2] ?? "").value;
+    if (imageFront || imageBack) {
+      return inlineCard(
+        ordinal,
+        "image-occlusion",
+        line,
+        IMAGE_MARKER,
+        imageFront,
+        imageBack,
+        headings,
+        listContext,
+        content
+      );
+    }
   }
 
   const reverseIndex = activeMarkerIndex(content.text, REVERSE_MARKER);
   if (reverseIndex >= 0) {
-    const front = content.text.slice(0, reverseIndex).trim();
-    const priorityResult = stripPriority(content.text.slice(reverseIndex + REVERSE_MARKER.length));
-    if (front && priorityResult.value) {
+    const front = stripTrailingTags(content.text.slice(0, reverseIndex)).value;
+    const backResult = stripTrailingTags(content.text.slice(reverseIndex + REVERSE_MARKER.length));
+    if (front && backResult.value) {
       return inlineCard(
         ordinal,
         "reverse",
         line,
         REVERSE_MARKER,
         front,
-        priorityResult.value,
-        priorityResult.priority,
+        backResult.value,
         headings,
         listContext,
         content
@@ -310,17 +315,16 @@ function parseInlineCard(
 
   const basicIndex = activeMarkerIndex(content.text, BASIC_MARKER);
   if (basicIndex >= 0) {
-    const front = content.text.slice(0, basicIndex).trim();
-    const priorityResult = stripPriority(content.text.slice(basicIndex + BASIC_MARKER.length));
-    if (front && priorityResult.value) {
+    const front = stripTrailingTags(content.text.slice(0, basicIndex)).value;
+    const backResult = stripTrailingTags(content.text.slice(basicIndex + BASIC_MARKER.length));
+    if (front && backResult.value) {
       return inlineCard(
         ordinal,
         "basic",
         line,
         BASIC_MARKER,
         front,
-        priorityResult.value,
-        priorityResult.priority,
+        backResult.value,
         headings,
         listContext,
         content
@@ -328,12 +332,12 @@ function parseInlineCard(
     }
   }
 
-  const priorityResult = stripPriority(content.text);
-  const clozeMatches = activeClozeMatches(priorityResult.value);
+  const tagResult = stripTrailingTags(content.text);
+  const clozeMatches = activeClozeMatches(tagResult.value);
   if (clozeMatches.length === 0) {
     return undefined;
   }
-  const clozeText = priorityResult.value.replace(
+  const clozeText = tagResult.value.replace(
     /⟦%%oab:cloze:v1%%([^\n]+?)⟧%%oab:end:v1%%/g,
     (_match, answer: string, offset: number) => {
       const clozeNumber = clozeMatches.findIndex((candidate) => candidate.index === offset) + 1;
@@ -350,13 +354,19 @@ function parseInlineCard(
     front: clozeText,
     back: "",
     items: [],
-    priority: priorityResult.priority,
+    tags: collectTags(content.text),
     headings,
     listContext,
     start: line,
     end: line,
     marker: { from: markerFrom, to: markerFrom + CLOZE_OPEN_MARKER.length },
-    frontRange: { from: content.from, to: line.to }
+    frontRange: {
+      from: content.from,
+      to: (() => {
+        const trailing = trailingTagMatch(content.text);
+        return trailing ? content.from + trailing.index : line.to;
+      })()
+    }
   });
 }
 
@@ -404,6 +414,7 @@ function parseClozeTableRow(
     front: tableText,
     back: "",
     items: [],
+    tags: collectTags(current.text),
     headings,
     listContext: listContexts.get(current.number) ?? [],
     start: current,
@@ -655,7 +666,7 @@ function visualIndent(value: string): number {
  */
 export function contextLabel(value: string): string {
   const withoutAnswer = maskClozeDeletions(truncateAtCardMarker(value));
-  const sanitized = describeEmbeds(stripPriority(withoutAnswer).value)
+  const sanitized = describeEmbeds(stripTrailingTags(withoutAnswer).value)
     .replace(/\s+/g, " ")
     .trim();
   return sanitized.length > 160 ? `${sanitized.slice(0, 157)}…` : sanitized;
@@ -702,23 +713,56 @@ function updateHeadingPath(headings: string[], line: string): void {
   }
 }
 
-function parsePriority(raw: string | undefined): Priority | undefined {
-  if (!raw) {
-    return undefined;
-  }
-  const value = Number.parseInt(raw, 10);
-  return value >= 1 && value <= 4 ? (value as Priority) : undefined;
+interface BlockStart {
+  front: string;
+  tags: string[];
 }
 
-function stripPriority(value: string): PriorityResult {
-  const match = value.match(PRIORITY_PATTERN);
+/**
+ * A block marker may be followed by tags, but never by content: text after the
+ * opening marker would silently disappear from the card.
+ */
+function blockStartMatch(text: string, pattern: RegExp): BlockStart | undefined {
+  const match = text.match(pattern);
   if (!match) {
-    return { value: value.trim() };
+    return undefined;
+  }
+  const trailing = match[2] ?? "";
+  if (trailing.trim() && !isOnlyTags(trailing)) {
+    return undefined;
   }
   return {
-    value: value.slice(0, match.index).trim(),
-    priority: parsePriority(match[1])
+    front: stripTrailingTags(match[1] ?? "").value,
+    tags: collectTags(text)
   };
+}
+
+/** The trailing tags of a block's opening line are metadata, not front text. */
+function blockFrontRange(content: CardLineContent, marker: string): TextRange {
+  const markerIndex = Math.max(0, content.text.indexOf(marker));
+  const frontText = content.text.slice(0, markerIndex);
+  const trailing = trailingTagMatch(frontText);
+  return {
+    from: content.from,
+    to: content.from + (trailing ? trailing.index : markerIndex)
+  };
+}
+
+function closingLineTags(line: SourceLine | undefined, marker: string): string[] {
+  return collectTags(line?.text.replace(marker, "") ?? "");
+}
+
+/** Lines that only hold tags are metadata for the block, not dumped content. */
+function parseDumpBody(lines: SourceLine[]): TagResult {
+  const tags: string[] = [];
+  const kept: string[] = [];
+  for (const line of lines) {
+    tags.push(...collectTags(line.text));
+    if (!isOnlyTags(line.text)) {
+      kept.push(line.text);
+    }
+  }
+  return { value: kept.join("\n").trim(), tags: mergeTags(tags) };
 }
 
 function findBlockEnd(lines: SourceLine[], startIndex: number, marker: string): number {
@@ -742,31 +786,44 @@ function blockRange(lines: SourceLine[]): TextRange | undefined {
   return first && last ? { from: first.from, to: last.to } : undefined;
 }
 
-function parseListItems(lines: SourceLine[]): { items: string[]; ranges: TextRange[] } {
+function parseListItems(lines: SourceLine[]): {
+  items: string[];
+  ranges: TextRange[];
+  itemTags: string[][];
+  tags: string[];
+} {
   const candidates = lines
     .map((line) => ({ line, match: line.text.match(LIST_ITEM_PATTERN) }))
     .filter((candidate): candidate is { line: SourceLine; match: RegExpMatchArray } => candidate.match !== null);
   const baseIndent = candidates.length > 0 ? Math.min(...candidates.map(({ match }) => match[1]?.length ?? 0)) : 0;
   const items: string[] = [];
   const ranges: TextRange[] = [];
+  const itemTags: string[][] = [];
 
   for (const line of lines) {
     const match = line.text.match(LIST_ITEM_PATTERN);
     const indent = match?.[1]?.length ?? Number.POSITIVE_INFINITY;
     if (match && indent === baseIndent) {
       items.push(sanitizeNestedInlineCards(match[2]?.trim() ?? ""));
-      ranges.push({ from: line.from, to: line.to });
+      ranges.push({ from: line.from, to: trailingContentEnd(line) });
+      itemTags.push(collectTags(line.text));
     } else if (items.length > 0 && line.text.trim()) {
       const lastIndex = items.length - 1;
       items[lastIndex] = `${items[lastIndex]}\n${sanitizeNestedInlineCards(line.text)}`;
       const previousRange = ranges[lastIndex];
       if (previousRange) {
-        previousRange.to = line.to;
+        previousRange.to = trailingContentEnd(line);
       }
+      itemTags[lastIndex] = mergeTags(itemTags[lastIndex] ?? [], collectTags(line.text));
     }
   }
 
-  return { items, ranges };
+  return { items, ranges, itemTags, tags: mergeTags(...itemTags) };
+}
+
+function trailingContentEnd(line: SourceLine): number {
+  const trailing = trailingTagMatch(line.text);
+  return trailing ? line.from + trailing.index : line.to;
 }
 
 function sanitizeNestedInlineCards(value: string): string {
@@ -782,5 +839,5 @@ function sanitizeNestedInlineCards(value: string): string {
     /⟦%%oab:cloze:v1%%([^\n]+?)⟧%%oab:end:v1%%/g,
     (_match, answer: string) => answer.trim()
   );
-  return stripPriority(sanitized).value.trimEnd();
+  return stripTrailingTags(sanitized).value.trimEnd();
 }

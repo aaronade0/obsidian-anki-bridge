@@ -9,6 +9,7 @@ import { sourceContext } from "./deck";
 import { renderLinkedText, type VaultLinkContext } from "./link-render";
 import { renderForAnki } from "./render";
 import { ownershipTag } from "./ownership";
+import { mergeTags, toAnkiTags } from "./tags";
 import { renderContext, sourceHref, type ContextLabelRenderer } from "./source-link";
 import type { DesiredAnkiNote, ParsedCard, RegistryCard } from "./types";
 import type { VisualRenderer } from "./visual-renderer";
@@ -43,7 +44,7 @@ export async function buildDesiredNotes(
       continue;
     }
     const context = sourceContext(sourcePath, parsed.headingPath, parsed.listContext);
-    const priorityTags = parsed.priority ? [`prio${parsed.priority}`, `oab-prio${parsed.priority}`] : [];
+    const cardTags = toAnkiTags(parsed.tags);
 
     if (parsed.kind === "cloze") {
       const contextHtml = renderContext(
@@ -75,7 +76,7 @@ export async function buildDesiredNotes(
           Source: "",
           Extra: ""
         },
-        tags: ["oab", ...priorityTags],
+        tags: mergeTags(["oab"], cardTags),
         ownedFields: ["CardKey", "Text", "Context", "Source", "Extra"],
         existingNoteId: registry.ankiNoteId
       });
@@ -130,7 +131,7 @@ export async function buildDesiredNotes(
             "",
             false
           ),
-          tags: ["oab", "oab-list", ...priorityTags],
+          tags: mergeTags(["oab", "oab-list"], cardTags, toAnkiTags(parsed.itemTags[itemOrdinal] ?? [])),
           ownedFields: standardOwnedFields,
           existingNoteId: child.ankiNoteId
         });
@@ -179,7 +180,7 @@ export async function buildDesiredNotes(
           "Back Extra": "",
           Comments: ""
         },
-        tags: ["oab", "oab-image-occlusion", ownershipTag(registry.key), ...priorityTags],
+        tags: mergeTags(["oab", "oab-image-occlusion", ownershipTag(registry.key)], cardTags),
         ownedFields: ["Image", "Header"],
         existingNoteId: registry.ankiNoteId
       });
@@ -200,7 +201,7 @@ export async function buildDesiredNotes(
         "",
         parsed.kind === "reverse"
       ),
-      tags: ["oab", `oab-${parsed.kind}`, ...priorityTags],
+      tags: mergeTags(["oab", `oab-${parsed.kind}`], cardTags),
       ownedFields: standardOwnedFields,
       existingNoteId: registry.ankiNoteId
     });
