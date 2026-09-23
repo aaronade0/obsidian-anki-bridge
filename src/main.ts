@@ -51,6 +51,7 @@ import type {
 import { ObsidianVisualRenderer } from "./visual-renderer";
 import { normalizeMarkdownPath } from "./vault-path";
 import { isSourcePathAllowed } from "./source-filter";
+import { retryableSyncFailurePaths } from "./sync-retry";
 import {
   forgettableRegistryFiles,
   isMissingFileError,
@@ -663,10 +664,11 @@ export default class ObsidianAnkiBridge extends Plugin {
       this.lastExternalFullScanAt = now;
     }
     const registeredPaths = new Set(this.data.files.map((file) => file.path));
+    const retryPaths = await this.failedPathsReadyForRetry(now);
     const files = fullScan
       ? this.app.vault.getMarkdownFiles().filter((file) => this.isSourceFileAllowed(file.path))
       : this.app.vault.getMarkdownFiles().filter((file) =>
-          registeredPaths.has(file.path) && this.isSourceFileAllowed(file.path)
+          (registeredPaths.has(file.path) || retryPaths.has(file.path)) && this.isSourceFileAllowed(file.path)
         );
     for (const file of files) {
       // File-sync clients can replace a note without emitting an Obsidian
@@ -677,13 +679,31 @@ export default class ObsidianAnkiBridge extends Plugin {
         continue;
       }
       const registered = this.data.files.find((candidate) => candidate.path === file.path);
-      const needsSync = registered
+      const needsSync = retryPaths.has(file.path) || (registered
         ? registered.contentHash !== stableHash(source)
-        : containsCanonicalMarker(source);
+        : containsCanonicalMarker(source));
       if (needsSync) {
         await this.syncFileGuarded(file, false, source);
         await yieldToUi();
       }
+    }
+  }
+
+  /**
+   * Failed notes are retried only once AnkiConnect answers again. Otherwise a
+   * closed Anki would rewrite every failure, and the shared data file, on each
+   * poll without any chance of success.
+   */
+  private async failedPathsReadyForRetry(now: number): Promise<Set<string>> {
+    const paths = retryableSyncFailurePaths(this.data.conflicts, now);
+    if (paths.size === 0) {
+      return paths;
+    }
+    try {
+      await this.client().ping();
+      return paths;
+    } catch {
+      return new Set();
     }
   }
 
@@ -993,6 +1013,14 @@ export default class ObsidianAnkiBridge extends Plugin {
   private async syncFile(file: TFile, manual: boolean, sourceOverride?: string): Promise<SyncSummary> {
     const source = sourceOverride ?? await this.app.vault.cachedRead(file);
     if (!containsCanonicalMarker(source) && !this.data.files.some((candidate) => candidate.path === file.path)) {
+      // A note without cards has nothing left to fail; an earlier failure for it
+      // would otherwise be retried forever.
+      if (unresolvedConflicts(this.data.conflicts).some((conflict) =>
+        conflict.code === "SYNC_FAILED" && conflict.path === file.path
+      )) {
+        this.resolveConflict("SYNC_FAILED", file.path);
+        await this.savePluginData();
+      }
       if (manual) {
         new Notice("No new Obsidian Anki cards were found in this note.");
       }

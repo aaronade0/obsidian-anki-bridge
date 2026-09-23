@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.4.1 - Failed notes recover on their own
+
+- Fixed notes that failed to synchronize while Anki was closed staying in the
+  conflict report as `SYNC_FAILED` after Anki was started again. The failed
+  content was already recorded as synchronized, so an unchanged note was never
+  tried again. Such notes are now retried automatically as soon as AnkiConnect
+  answers, and their conflict entry disappears after the successful sync.
+- Paced retries of errors that persist while Anki is running to one attempt
+  every two minutes, and skipped them entirely while Anki is unreachable.
+- Cleared a leftover sync failure for a note that no longer holds any cards.
+
 ## 1.4.0 - Tags from every card line
 
 - Every Obsidian tag written on a line that belongs to a card is now added to
