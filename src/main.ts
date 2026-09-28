@@ -14,7 +14,8 @@ import {
 import {
   IMAGE_OCCLUSION_MODEL,
   STANDARD_MODEL,
-  AnkiConnectClient
+  AnkiConnectClient,
+  AnkiUnreachableError
 } from "./anki-connect";
 import { deriveDeckName } from "./deck";
 import { buildDesiredNotes } from "./desired-notes";
@@ -51,7 +52,7 @@ import type {
 import { ObsidianVisualRenderer } from "./visual-renderer";
 import { normalizeMarkdownPath } from "./vault-path";
 import { isSourcePathAllowed } from "./source-filter";
-import { retryableSyncFailurePaths } from "./sync-retry";
+import { isConnectionStatusEntry, retryableSyncFailurePaths, SYNC_PENDING } from "./sync-retry";
 import {
   forgettableRegistryFiles,
   isMissingFileError,
@@ -100,6 +101,8 @@ export default class ObsidianAnkiBridge extends Plugin {
   private processingMobileOutbox?: Promise<void>;
   private scanningExternalChanges?: Promise<void>;
   private lastExternalFullScanAt = 0;
+  // Undefined until the first request after startup has answered.
+  private ankiConnected?: boolean;
 
   get bridgeSettings(): PluginSettings {
     return this.data.settings;
@@ -232,6 +235,7 @@ export default class ObsidianAnkiBridge extends Plugin {
       ));
       this.registerInterval(window.setInterval(
         () => {
+          void this.checkAnkiConnection();
           void this.processMobileOutbox();
           void this.scanExternalChanges();
         },
@@ -599,6 +603,7 @@ export default class ObsidianAnkiBridge extends Plugin {
   private async handleVanishedSource(path: string, explicitlyDeletedInObsidian: boolean): Promise<void> {
     this.clearPendingSync(path);
     this.resolveConflict("SYNC_FAILED", path);
+    this.resolveConflict(SYNC_PENDING, path);
     if (!this.data.files.some((candidate) => candidate.path === path)) {
       await this.savePluginData();
       return;
@@ -637,6 +642,7 @@ export default class ObsidianAnkiBridge extends Plugin {
   }
 
   private async runDesktopCatchUp(): Promise<void> {
+    await this.checkAnkiConnection();
     await this.pruneVanishedSourceConflicts();
     await this.processMobileOutbox();
     await this.scanExternalChanges(true);
@@ -750,6 +756,11 @@ export default class ObsidianAnkiBridge extends Plugin {
           queued.push(candidate);
         }
       }
+    }
+    if (queued.length > 0 && !(await this.checkAnkiConnection())) {
+      // Queued changes wait in order until Anki is open instead of piling up failures.
+      await this.refreshMobileOutboxCount();
+      return;
     }
     queued.sort((left, right) => {
       const time = left.stored.event.createdAt - right.stored.event.createdAt;
@@ -996,6 +1007,16 @@ export default class ObsidianAnkiBridge extends Plugin {
         return undefined;
       }
       const message = errorMessage(error);
+      if (error instanceof AnkiUnreachableError) {
+        // Not a conflict: the status bar shows the missing connection, and the
+        // note is synchronized as soon as AnkiConnect answers again.
+        this.recordConflict(SYNC_PENDING, "Waiting for Anki to be opened.", file.path, undefined, "warning");
+        await this.savePluginData();
+        if (manual) {
+          new Notice("Anki is not connected. The note is synchronized as soon as Anki is open.", 8_000);
+        }
+        return undefined;
+      }
       this.recordConflict("SYNC_FAILED", message, file.path);
       await this.savePluginData();
       const now = Date.now();
@@ -1015,10 +1036,12 @@ export default class ObsidianAnkiBridge extends Plugin {
     if (!containsCanonicalMarker(source) && !this.data.files.some((candidate) => candidate.path === file.path)) {
       // A note without cards has nothing left to fail; an earlier failure for it
       // would otherwise be retried forever.
-      if (unresolvedConflicts(this.data.conflicts).some((conflict) =>
-        conflict.code === "SYNC_FAILED" && conflict.path === file.path
+      if (this.data.conflicts.some((conflict) =>
+        (conflict.code === "SYNC_FAILED" || conflict.code === SYNC_PENDING) &&
+        conflict.path === file.path && conflict.resolvedAt === undefined
       )) {
         this.resolveConflict("SYNC_FAILED", file.path);
+        this.resolveConflict(SYNC_PENDING, file.path);
         await this.savePluginData();
       }
       if (manual) {
@@ -1197,6 +1220,7 @@ export default class ObsidianAnkiBridge extends Plugin {
     }
 
     this.resolveConflict("SYNC_FAILED", file.path);
+    this.resolveConflict(SYNC_PENDING, file.path);
     this.resolveConflict("ANKI_UNREACHABLE");
     this.data.lastSuccessfulSyncAt = Date.now();
     await this.savePluginData();
@@ -1526,7 +1550,32 @@ export default class ObsidianAnkiBridge extends Plugin {
   }
 
   private client(): AnkiConnectClient {
-    return new AnkiConnectClient(this.bridgeSettings.ankiConnectUrl, this.bridgeSettings.ankiConnectApiKey);
+    return new AnkiConnectClient(
+      this.bridgeSettings.ankiConnectUrl,
+      this.bridgeSettings.ankiConnectApiKey,
+      (reachable) => this.setAnkiConnected(reachable)
+    );
+  }
+
+  /** Asks AnkiConnect whether Anki is running; the answer updates the status bar. */
+  private async checkAnkiConnection(): Promise<boolean> {
+    if (Platform.isMobile) {
+      return false;
+    }
+    try {
+      await this.client().ping();
+      return true;
+    } catch {
+      return this.ankiConnected === true;
+    }
+  }
+
+  private setAnkiConnected(connected: boolean): void {
+    if (this.ankiConnected === connected) {
+      return;
+    }
+    this.ankiConnected = connected;
+    this.updateStatus();
   }
 
   async relinkMissingFile(conflictKey: string, rawNewPath: string): Promise<"moved" | "queued"> {
@@ -1825,6 +1874,17 @@ export default class ObsidianAnkiBridge extends Plugin {
     }
     const unresolved = unresolvedConflicts(this.data.conflicts);
     this.statusEl.empty();
+    const disconnected = !Platform.isMobile && this.ankiConnected === false;
+    this.statusEl.toggleClass("is-disconnected", disconnected);
+    if (disconnected) {
+      setIcon(this.statusEl.createSpan({ cls: "oab-status-icon" }), "unplug");
+      this.statusEl.createSpan({ text: " Anki: not connected" });
+      this.statusEl.toggleClass("has-conflicts", false);
+      this.statusEl.setAttr("aria-label",
+        "Anki is not running or AnkiConnect is not reachable. Changes are synchronized as soon as Anki is open." +
+        (unresolved.length > 0 ? ` ${unresolved.length} conflict(s) – click for details.` : ""));
+      return;
+    }
     const icon = this.statusEl.createSpan({ cls: "oab-status-icon" });
     setIcon(icon, unresolved.length > 0 ? "alert-triangle" : this.queuedMobileActions > 0 ? "clock" : "badge-check");
     const parts: string[] = [];
@@ -2121,7 +2181,7 @@ function emptySummary(path: string): SyncSummary {
 }
 
 function unresolvedConflicts(conflicts: SyncConflict[]): SyncConflict[] {
-  return conflicts.filter((conflict) => conflict.resolvedAt === undefined);
+  return conflicts.filter((conflict) => conflict.resolvedAt === undefined && !isConnectionStatusEntry(conflict));
 }
 
 function isRemovalConflict(conflict: SyncConflict): boolean {

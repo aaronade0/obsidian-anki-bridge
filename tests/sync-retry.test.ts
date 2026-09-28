@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { retryableSyncFailurePaths, SYNC_FAILURE_RETRY_DELAY_MS } from "../src/sync-retry";
+import {
+  isConnectionStatusEntry,
+  retryableSyncFailurePaths,
+  SYNC_FAILURE_RETRY_DELAY_MS,
+  SYNC_PENDING
+} from "../src/sync-retry";
 import type { SyncConflict } from "../src/types";
 
 function conflict(overrides: Partial<SyncConflict>): SyncConflict {
@@ -34,5 +39,19 @@ describe("retryableSyncFailurePaths", () => {
       conflict({ path: undefined })
     ];
     expect(retryableSyncFailurePaths(conflicts, now).size).toBe(0);
+  });
+
+  it("retries a note that waited for Anki without any delay", () => {
+    const pending = conflict({ code: SYNC_PENDING, lastSeenAt: now });
+    expect(retryableSyncFailurePaths([pending], now)).toEqual(new Set(["Note.md"]));
+    expect(retryableSyncFailurePaths([{ ...pending, resolvedAt: now }], now).size).toBe(0);
+  });
+});
+
+describe("isConnectionStatusEntry", () => {
+  it("keeps connection states out of the conflict report", () => {
+    expect(isConnectionStatusEntry(conflict({ code: SYNC_PENDING }))).toBe(true);
+    expect(isConnectionStatusEntry(conflict({ code: "ANKI_UNREACHABLE" }))).toBe(true);
+    expect(isConnectionStatusEntry(conflict({}))).toBe(false);
   });
 });

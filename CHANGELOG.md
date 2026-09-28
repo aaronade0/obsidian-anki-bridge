@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.4.2 - Calm status while Anki is closed
+
+- Stopped piling up error notices and conflict entries when Obsidian is open
+  but Anki is not. The status bar now shows `Anki: not connected` in orange
+  instead, and switches back to `Anki ready` as soon as AnkiConnect answers.
+- Notes changed while Anki is closed wait quietly and are synchronized
+  automatically once Anki is open. Queued mobile changes likewise wait instead
+  of failing.
+- A manual sync while Anki is closed shows a single short hint instead of an
+  error.
+
 ## 1.4.1 - Failed notes recover on their own
 
 - Fixed notes that failed to synchronize while Anki was closed staying in the

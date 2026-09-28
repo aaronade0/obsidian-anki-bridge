@@ -26,10 +26,14 @@ export const CLOZE_MODEL = "Obsidian Flashcards - Cloze v1";
 export const IMAGE_OCCLUSION_MODEL = "Image Occlusion";
 const IMAGE_OCCLUSION_FIELDS = ["Occlusion", "Image", "Header", "Back Extra", "Comments"];
 
+/** AnkiConnect did not answer at all, usually because Anki is not running. */
+export class AnkiUnreachableError extends Error {}
+
 export class AnkiConnectClient {
   constructor(
     private readonly url: string,
-    private readonly apiKey: string
+    private readonly apiKey: string,
+    private readonly onReachability?: (reachable: boolean) => void
   ) {}
 
   async invoke<T>(action: string, params: Record<string, unknown> = {}): Promise<T> {
@@ -47,8 +51,10 @@ export class AnkiConnectClient {
         throw: false
       });
     } catch (error) {
-      throw new Error(`AnkiConnect ist unter ${this.url} nicht erreichbar: ${errorMessage(error)}`);
+      this.onReachability?.(false);
+      throw new AnkiUnreachableError(`AnkiConnect is not reachable at ${this.url}: ${errorMessage(error)}`);
     }
+    this.onReachability?.(true);
     if (response.status < 200 || response.status >= 300) {
       throw new Error(`AnkiConnect antwortete mit HTTP ${response.status}.`);
     }

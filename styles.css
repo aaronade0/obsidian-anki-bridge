@@ -50,6 +50,10 @@
   font-weight: 600;
 }
 
+.oab-status.is-disconnected {
+  color: var(--color-orange);
+}
+
 .oab-status-icon,
 .oab-status-icon svg {
   display: inline-block;
