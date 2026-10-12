@@ -1,3 +1,4 @@
+import { SYNC_PENDING } from "./sync-retry";
 import type { RegistryCard, RegistryFile, SyncConflict } from "./types";
 
 /**
@@ -55,7 +56,8 @@ export function prunableSyncFailures(
   cards: readonly RegistryCard[]
 ): SyncConflict[] {
   return conflicts.filter((conflict) => {
-    if (conflict.code !== "SYNC_FAILED" || conflict.resolvedAt !== undefined || !conflict.path) {
+    const isSyncFailure = conflict.code === "SYNC_FAILED" || conflict.code === SYNC_PENDING;
+    if (!isSyncFailure || conflict.resolvedAt !== undefined || !conflict.path) {
       return false;
     }
     const registered = files.find((file) => file.path === conflict.path);

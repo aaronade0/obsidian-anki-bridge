@@ -907,7 +907,7 @@ export default class ObsidianAnkiBridge extends Plugin {
     );
     const target = conflict ? findRegistryTarget(this.data.cards, event.cardKey) : undefined;
     const stillMissing = target?.child ? target.child.status === "missing" : target?.card.status === "missing";
-    if (!conflict || !target || !stillMissing) {
+    if (!conflict || (target && !stillMissing)) {
       return true;
     }
     await this.deleteRemovedCard(event.conflictKey);
@@ -1758,8 +1758,8 @@ export default class ObsidianAnkiBridge extends Plugin {
     }
     const target = findRegistryTarget(this.data.cards, conflict.cardKey);
     const isStillMissing = target?.child ? target.child.status === "missing" : target?.card.status === "missing";
-    if (!target || !isStillMissing) {
-      throw new Error("The card is present in the note again or is no longer registered.");
+    if (target && !isStillMissing) {
+      throw new Error("The card is present in the note again; nothing was deleted.");
     }
 
     if (Platform.isMobile) {
@@ -1770,6 +1770,10 @@ export default class ObsidianAnkiBridge extends Plugin {
       });
       await this.refreshMobileOutboxCount();
       return -1;
+    }
+
+    if (!target) {
+      return this.deleteOrphanedRemovedCard(conflict.key, conflict.cardKey);
     }
 
     const ownedNotes = target.child
@@ -1800,9 +1804,7 @@ export default class ObsidianAnkiBridge extends Plugin {
         this.data.cards = this.data.cards.filter((card) => card.key !== target.card.key);
       }
       for (const owned of ownedNotes) {
-        this.resolveConflict("CARD_REMOVED", conflict.path, owned.key);
-        this.resolveConflict("LIST_ITEM_REMOVED", conflict.path, owned.key);
-        this.resolveConflict("ANKI_DELETE_FAILED", conflict.path, owned.key);
+        this.resolveCardRemoval(owned.key);
       }
       if (!target.child) {
         const sourceFile = this.data.files.find((file) => file.key === target.card.fileKey);
@@ -1825,6 +1827,51 @@ export default class ObsidianAnkiBridge extends Plugin {
       await this.savePluginData();
       throw error;
     }
+  }
+
+  /**
+   * Confirms a removal whose card is no longer in the registry, for example
+   * after the source note was renamed while the removal was still pending.
+   * Only Anki notes that carry this bridge ID are deleted; when none is left,
+   * the stale report entry is simply closed.
+   */
+  private async deleteOrphanedRemovedCard(conflictKey: string, cardKey: string): Promise<number> {
+    const conflict = this.data.conflicts.find((candidate) => candidate.key === conflictKey);
+    const client = this.client();
+    try {
+      await client.ping();
+      const ownedNotes = [{ key: cardKey }];
+      const noteIds = await this.verifiedOwnedNoteIds(client, ownedNotes);
+      if (findRegistryTarget(this.data.cards, cardKey)) {
+        throw new Error("The card became active in Obsidian during confirmation; nothing was deleted.");
+      }
+      if (noteIds.size > 0) {
+        await client.deleteNotes([...noteIds]);
+        await this.verifyOwnedNotesDeleted(client, ownedNotes, noteIds);
+      }
+      this.resolveCardRemoval(cardKey);
+      await this.savePluginData();
+      return noteIds.size;
+    } catch (error) {
+      this.recordConflict(
+        "ANKI_DELETE_FAILED",
+        `Confirmed deletion failed: ${errorMessage(error)}`,
+        conflict?.path,
+        cardKey
+      );
+      await this.savePluginData();
+      throw error;
+    }
+  }
+
+  /**
+   * A bridge ID is unique, so every open removal entry for it is settled at
+   * once, including duplicates left under an earlier path of a renamed note.
+   */
+  private resolveCardRemoval(cardKey: string): void {
+    this.resolveConflict("CARD_REMOVED", undefined, cardKey);
+    this.resolveConflict("LIST_ITEM_REMOVED", undefined, cardKey);
+    this.resolveConflict("ANKI_DELETE_FAILED", undefined, cardKey);
   }
 
   private recordConflict(

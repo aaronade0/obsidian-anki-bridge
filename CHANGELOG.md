@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.4.3 - Stale removal entries can be cleared
+
+- Fixed `Delete from Anki` failing with "The card is present in the note again
+  or is no longer registered" for cards whose source note was renamed while the
+  removal was pending. The bridge now deletes any Anki note that still carries
+  the card's bridge ID and closes the entry; if none is left, it just closes it.
+- Confirming a removal now settles all entries for that card, including
+  duplicates listed under an earlier name of the note.
+- Pending syncs for notes that no longer exist and hold no cards are cleared
+  automatically instead of staying in the report.
+
 ## 1.4.2 - Calm status while Anki is closed
 
 - Stopped piling up error notices and conflict entries when Obsidian is open

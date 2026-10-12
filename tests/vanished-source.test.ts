@@ -97,6 +97,13 @@ describe("stale read failures", () => {
     ]);
   });
 
+  it("also selects pending syncs left behind by a renamed note", () => {
+    const conflicts = [conflict("SYNC_PENDING", "Tutorium/Tutorium.md")];
+    expect(prunableSyncFailures(conflicts, [], []).map((entry) => entry.path)).toEqual([
+      "Tutorium/Tutorium.md"
+    ]);
+  });
+
   it("keeps read failures for notes that still own cards", () => {
     const files = [registryFile("f1", "Biology.md")];
     const cards = [registryCard("c1", "f1")];
