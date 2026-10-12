@@ -1830,6 +1830,35 @@ export default class ObsidianAnkiBridge extends Plugin {
   }
 
   /**
+   * Confirms every pending card removal at once. Each entry goes through the
+   * same verified single-card deletion; a failure leaves only that entry in
+   * the report and does not stop the others.
+   */
+  async deleteAllRemovedCards(): Promise<{ deleted: number; queued: number; failed: number }> {
+    const result = { deleted: 0, queued: 0, failed: 0 };
+    const keys = unresolvedConflicts(this.data.conflicts)
+      .filter((conflict) => isRemovalConflict(conflict))
+      .map((conflict) => conflict.key);
+    for (const key of keys) {
+      // Deleting a card also settles the entries of its list items.
+      if (!this.data.conflicts.some((conflict) => conflict.key === key && conflict.resolvedAt === undefined)) {
+        continue;
+      }
+      try {
+        const deletedNotes = await this.deleteRemovedCard(key);
+        if (deletedNotes === -1) {
+          result.queued += 1;
+        } else {
+          result.deleted += deletedNotes;
+        }
+      } catch {
+        result.failed += 1;
+      }
+    }
+    return result;
+  }
+
+  /**
    * Confirms a removal whose card is no longer in the registry, for example
    * after the source note was renamed while the removal was still pending.
    * Only Anki notes that carry this bridge ID are deleted; when none is left,
@@ -1984,6 +2013,16 @@ class ConflictModal extends Modal {
     this.contentEl.createEl("p", {
       text: "Cards removed from notes remain in Anki. Only cards explicitly confirmed below are deleted."
     });
+    const removals = conflicts.filter((conflict) => isRemovalConflict(conflict));
+    if (removals.length > 1) {
+      const button = this.contentEl.createEl("button", {
+        text: `Delete all ${removals.length} pending cards from Anki …`
+      });
+      button.addClass("mod-warning");
+      button.addEventListener("click", () => {
+        new DeleteAllConfirmationModal(this.plugin, removals.length, () => this.render()).open();
+      });
+    }
     for (const conflict of conflicts) {
       const item = this.contentEl.createDiv({ cls: `oab-conflict oab-conflict-${conflict.severity}` });
       item.createEl("strong", { text: conflictTitle(conflict) });
@@ -2067,6 +2106,56 @@ class DeleteConfirmationModal extends Modal {
         cancel.disabled = false;
         confirm.disabled = false;
         confirm.setText("Try again");
+      });
+    });
+  }
+}
+
+class DeleteAllConfirmationModal extends Modal {
+  constructor(
+    private readonly plugin: ObsidianAnkiBridge,
+    private readonly count: number,
+    private readonly onDeleted: () => void
+  ) {
+    super(plugin.app);
+  }
+
+  onOpen(): void {
+    this.contentEl.empty();
+    this.contentEl.createEl("h2", { text: `Permanently delete all ${this.count} pending cards from Anki?` });
+    this.contentEl.createEl("p", {
+      text: "This deletes every card listed as removed from Obsidian, including learning progress and review history. Missing notes that may have been moved are not affected."
+    });
+    const cardsByPath = new Map<string, number>();
+    for (const conflict of unresolvedConflicts(this.plugin.data.conflicts).filter(isRemovalConflict)) {
+      const path = conflict.path ?? "(unknown note)";
+      cardsByPath.set(path, (cardsByPath.get(path) ?? 0) + 1);
+    }
+    const list = this.contentEl.createEl("ul");
+    for (const [path, count] of cardsByPath) {
+      list.createEl("li").createEl("code", { text: `${path} (${count})` });
+    }
+    const actions = this.contentEl.createDiv({ cls: "oab-modal-actions" });
+    const cancel = actions.createEl("button", { text: "Cancel" });
+    cancel.addEventListener("click", () => this.close());
+    const confirm = actions.createEl("button", { text: "Permanently delete all from Anki" });
+    confirm.addClasses(["mod-cta", "mod-warning"]);
+    confirm.addEventListener("click", () => {
+      cancel.disabled = true;
+      confirm.disabled = true;
+      confirm.setText("Deleting …");
+      void this.plugin.deleteAllRemovedCards().then(({ deleted, queued, failed }) => {
+        const parts = [
+          queued > 0
+            ? `${queued} deletion(s) queued for desktop AnkiConnect.`
+            : `${deleted} Anki note(s) permanently deleted.`
+        ];
+        if (failed > 0) {
+          parts.push(`${failed} entr${failed === 1 ? "y" : "ies"} could not be deleted and remain in the report.`);
+        }
+        new Notice(parts.join("\n"), failed > 0 ? 12_000 : 8_000);
+        this.close();
+        this.onDeleted();
       });
     });
   }

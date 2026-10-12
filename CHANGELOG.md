@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.5.0 - Delete all pending cards at once
+
+- Added **Delete all N pending cards from Anki…** to the conflict report when
+  more than one card awaits deletion, so deleting a large note no longer means
+  confirming every card separately. The confirmation lists the affected notes
+  with their card counts. Each card is still ownership-checked and verified
+  after deletion; failures stay in the report without stopping the rest.
+  Missing notes that may have been moved are not included.
+
 ## 1.4.3 - Stale removal entries can be cleared
 
 - Fixed `Delete from Anki` failing with "The card is present in the note again

@@ -22,8 +22,9 @@ The repository's integration script refuses the default production port.
 ## Safety invariants
 
 - Never write generated IDs or metadata into Markdown.
-- Never delete Anki notes automatically; deletion requires an explicit,
-  target-specific confirmation and post-delete verification.
+- Never delete Anki notes automatically; deletion requires an explicit
+  confirmation that names its targets (a single card, or the listed notes of a
+  bulk confirmation) and post-delete verification of every note.
 - Never overwrite scheduling or review data.
 - Never guess ambiguous file/card identity.
 - Never make a sync failure invisible.

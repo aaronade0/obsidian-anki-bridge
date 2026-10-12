@@ -370,6 +370,12 @@ its cards. Each card appears separately in **Conflicts and pending deletions**
 and remains in Anki until its deletion is confirmed. Restoring the note before
 confirmation reactivates the same Anki notes and clears those entries.
 
+When several cards are pending, **Delete all N pending cards from Anki…** at the
+top of the report confirms them in one step. Its dialog lists the affected
+notes with their card counts; each card is still verified and deleted
+individually, and any card that fails stays in the report. Missing notes that
+may have been moved are never included.
+
 If a source note disappears without a deletion action observed inside Obsidian
 (for example through a sync client or file manager), the bridge cannot safely
 distinguish a deletion from a move. It therefore shows a non-destructive
