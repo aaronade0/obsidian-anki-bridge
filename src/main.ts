@@ -15,7 +15,12 @@ import {
   IMAGE_OCCLUSION_MODEL,
   STANDARD_MODEL,
   AnkiConnectClient,
-  AnkiUnreachableError
+  AnkiUnreachableError,
+  AnkiProfileMismatchError,
+  type AnkiProfileCheckCache,
+  type AnkiProfileStatus,
+  describeProfileMismatch,
+  normalizeProfileName
 } from "./anki-connect";
 import { deriveDeckName } from "./deck";
 import { buildDesiredNotes } from "./desired-notes";
@@ -71,7 +76,8 @@ const DEFAULT_SETTINGS: PluginSettings = {
   showSuccessNotices: false,
   excludedPaths: [],
   excludedFilenamePatterns: [],
-  includedFolders: []
+  includedFolders: [],
+  requiredAnkiProfile: ""
 };
 
 const DEVICE_ID_STORAGE_KEY = "obsidian-anki-bridge-device-id";
@@ -103,6 +109,9 @@ export default class ObsidianAnkiBridge extends Plugin {
   private lastExternalFullScanAt = 0;
   // Undefined until the first request after startup has answered.
   private ankiConnected?: boolean;
+  // Set while a required profile is configured and Anki has a different one open.
+  private profileMismatch?: AnkiProfileStatus;
+  private readonly profileCheckCache: Partial<AnkiProfileCheckCache> = {};
 
   get bridgeSettings(): PluginSettings {
     return this.data.settings;
@@ -314,8 +323,26 @@ export default class ObsidianAnkiBridge extends Plugin {
       return;
     }
     try {
-      const version = await this.client().ping();
-      new Notice(`AnkiConnect is available (API version ${version}).`);
+      const client = this.client();
+      const version = await client.ping();
+      const activeProfile = await client.getActiveProfile();
+      const required = normalizeProfileName(this.bridgeSettings.requiredAnkiProfile);
+      const profileLine = activeProfile === undefined
+        ? "The open Anki profile cannot be reported by this AnkiConnect version."
+        : `Open Anki profile: “${activeProfile}”.`;
+      let requirementLine = "";
+      if (required) {
+        try {
+          await client.assertRequiredProfile(true);
+          requirementLine = "\nIt matches the required profile; synchronization is active.";
+        } catch (error) {
+          if (!(error instanceof AnkiProfileMismatchError)) {
+            throw error;
+          }
+          requirementLine = `\n${error.message} Synchronization is paused until then.`;
+        }
+      }
+      new Notice(`AnkiConnect is available (API version ${version}).\n${profileLine}${requirementLine}`, required ? 12_000 : 6_000);
       this.resolveConflict("ANKI_UNREACHABLE");
       await this.savePluginData();
     } catch (error) {
@@ -664,6 +691,11 @@ export default class ObsidianAnkiBridge extends Plugin {
     if (!this.bridgeSettings.autoSync) {
       return;
     }
+    if (normalizeProfileName(this.bridgeSettings.requiredAnkiProfile) &&
+        !(await this.checkAnkiConnection()) && this.profileMismatch) {
+      // Another profile is open: nothing to do until the required one returns.
+      return;
+    }
     const now = Date.now();
     const fullScan = forceFullScan || now - this.lastExternalFullScanAt >= EXTERNAL_FULL_SCAN_INTERVAL_MS;
     if (fullScan) {
@@ -706,7 +738,9 @@ export default class ObsidianAnkiBridge extends Plugin {
       return paths;
     }
     try {
-      await this.client().ping();
+      const client = this.client();
+      await client.ping();
+      await client.assertRequiredProfile();
       return paths;
     } catch {
       return new Set();
@@ -798,6 +832,11 @@ export default class ObsidianAnkiBridge extends Plugin {
           queued.slice(index + 1).map((candidate) => candidate.stored)
         );
         if (!handled) {
+          if (this.profileMismatch || this.ankiConnected === false) {
+            // Anki closed or switched profile mid-run: keep the remaining
+            // events queued in order instead of applying later ones first.
+            break;
+          }
           continue;
         }
         await outbox.remove(stored.storagePath);
@@ -812,6 +851,10 @@ export default class ObsidianAnkiBridge extends Plugin {
           await this.savePluginData();
         }
       } catch (error) {
+        if (error instanceof AnkiUnreachableError) {
+          // Includes a profile mismatch: wait, keep this and later events queued.
+          break;
+        }
         this.recordConflict(
           "MOBILE_OUTBOX_FAILED",
           `A queued mobile change could not yet be processed: ${errorMessage(error)}`,
@@ -1007,6 +1050,15 @@ export default class ObsidianAnkiBridge extends Plugin {
         return undefined;
       }
       const message = errorMessage(error);
+      if (error instanceof AnkiProfileMismatchError) {
+        // Paused, not failed: the note waits until the required profile is open.
+        this.recordConflict(SYNC_PENDING, error.message, file.path, undefined, "warning");
+        await this.savePluginData();
+        if (manual) {
+          new Notice(`${error.message} The note is synchronized as soon as that profile is open.`, 10_000);
+        }
+        return undefined;
+      }
       if (error instanceof AnkiUnreachableError) {
         // Not a conflict: the status bar shows the missing connection, and the
         // note is synchronized as soon as AnkiConnect answers again.
@@ -1553,8 +1605,49 @@ export default class ObsidianAnkiBridge extends Plugin {
     return new AnkiConnectClient(
       this.bridgeSettings.ankiConnectUrl,
       this.bridgeSettings.ankiConnectApiKey,
-      (reachable) => this.setAnkiConnected(reachable)
+      (reachable) => this.setAnkiConnected(reachable),
+      {
+        requiredProfile: this.bridgeSettings.requiredAnkiProfile,
+        cache: this.profileCheckCache,
+        onStatus: (status) => this.setProfileStatus(status)
+      }
     );
+  }
+
+  /** Called after the setting changes, so the next request checks the profile again. */
+  requiredProfileChanged(): void {
+    this.profileCheckCache.checkedAt = 0;
+    if (!normalizeProfileName(this.bridgeSettings.requiredAnkiProfile)) {
+      this.setProfileStatus(undefined);
+    } else if (!Platform.isMobile) {
+      void this.checkAnkiConnection().then((ready) => {
+        if (ready) {
+          void this.runDesktopCatchUp();
+        }
+      });
+    }
+  }
+
+  /** Profile names for the settings suggestion list; empty when Anki is closed or cannot list them. */
+  async listAnkiProfiles(): Promise<string[]> {
+    if (Platform.isMobile) {
+      return [];
+    }
+    try {
+      return await this.client().getProfiles();
+    } catch {
+      return [];
+    }
+  }
+
+  private setProfileStatus(status: AnkiProfileStatus | undefined): void {
+    const mismatch = status && !status.matches ? status : undefined;
+    const before = this.profileMismatch ? describeProfileMismatch(this.profileMismatch) : "";
+    const after = mismatch ? describeProfileMismatch(mismatch) : "";
+    this.profileMismatch = mismatch;
+    if (before !== after) {
+      this.updateStatus();
+    }
   }
 
   /** Asks AnkiConnect whether Anki is running; the answer updates the status bar. */
@@ -1563,9 +1656,14 @@ export default class ObsidianAnkiBridge extends Plugin {
       return false;
     }
     try {
-      await this.client().ping();
+      const client = this.client();
+      await client.ping();
+      await client.assertRequiredProfile(true);
       return true;
-    } catch {
+    } catch (error) {
+      if (error instanceof AnkiProfileMismatchError) {
+        return false;
+      }
       return this.ankiConnected === true;
     }
   }
@@ -1952,12 +2050,28 @@ export default class ObsidianAnkiBridge extends Plugin {
     this.statusEl.empty();
     const disconnected = !Platform.isMobile && this.ankiConnected === false;
     this.statusEl.toggleClass("is-disconnected", disconnected);
+    this.statusEl.toggleClass("is-profile-paused", false);
     if (disconnected) {
       setIcon(this.statusEl.createSpan({ cls: "oab-status-icon" }), "unplug");
       this.statusEl.createSpan({ text: " Anki: not connected" });
       this.statusEl.toggleClass("has-conflicts", false);
       this.statusEl.setAttr("aria-label",
         "Anki is not running or AnkiConnect is not reachable. Changes are synchronized as soon as Anki is open." +
+        (unresolved.length > 0 ? ` ${unresolved.length} conflict(s) – click for details.` : ""));
+      return;
+    }
+    const mismatch = !Platform.isMobile && this.ankiConnected !== false ? this.profileMismatch : undefined;
+    this.statusEl.toggleClass("is-profile-paused", mismatch !== undefined);
+    if (mismatch) {
+      setIcon(this.statusEl.createSpan({ cls: "oab-status-icon" }), "user-x");
+      this.statusEl.createSpan({
+        text: mismatch.activeProfile === undefined
+          ? " Anki: profile unknown – paused"
+          : ` Anki: waiting for profile “${mismatch.requiredProfile}”`
+      });
+      this.statusEl.toggleClass("has-conflicts", false);
+      this.statusEl.setAttr("aria-label",
+        `${describeProfileMismatch(mismatch)} Nothing is synchronized, deleted, or discarded until then; queued changes wait.` +
         (unresolved.length > 0 ? ` ${unresolved.length} conflict(s) – click for details.` : ""));
       return;
     }

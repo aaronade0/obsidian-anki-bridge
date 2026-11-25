@@ -13,7 +13,8 @@ const defaults: PluginSettings = {
   showSuccessNotices: false,
   excludedPaths: [],
   excludedFilenamePatterns: [],
-  includedFolders: []
+  includedFolders: [],
+  requiredAnkiProfile: ""
 };
 
 function partialData(deckRoot: string, key: string): Partial<PluginData> {

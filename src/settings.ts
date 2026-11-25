@@ -48,6 +48,38 @@ export class BridgeSettingTab extends PluginSettingTab {
             await this.plugin.savePluginData();
           });
         });
+
+      new Setting(containerEl)
+        .setName("Required Anki profile")
+        .setDesc(
+          "Optional. When set, Anki Bridge only reads and writes cards while this Anki profile is open. " +
+          "With any other profile open, synchronization pauses: queued changes wait and nothing is marked missing or removed. " +
+          "Leave empty to use whichever profile is open."
+        )
+        .addText((text) => {
+          text.setPlaceholder("Any profile").setValue(this.plugin.bridgeSettings.requiredAnkiProfile);
+          // Saved on commit (Enter or leaving the field) rather than per keystroke,
+          // so a half-typed or briefly empty value never takes effect.
+          text.inputEl.addEventListener("change", () => {
+            void (async () => {
+              const value = text.getValue().trim();
+              if (value === this.plugin.bridgeSettings.requiredAnkiProfile) {
+                return;
+              }
+              this.plugin.bridgeSettings.requiredAnkiProfile = value;
+              await this.plugin.savePluginData();
+              this.plugin.requiredProfileChanged();
+            })();
+          });
+          const listId = "oab-anki-profiles";
+          const datalist = containerEl.createEl("datalist", { attr: { id: listId } });
+          text.inputEl.setAttr("list", listId);
+          void this.plugin.listAnkiProfiles().then((profiles) => {
+            for (const profile of profiles) {
+              datalist.createEl("option", { attr: { value: profile } });
+            }
+          });
+        });
     }
 
     new Setting(containerEl)
@@ -167,7 +199,7 @@ export class BridgeSettingTab extends PluginSettingTab {
     if (!Platform.isMobile) {
       new Setting(containerEl)
         .setName("Test connection")
-        .setDesc("Does not modify the Anki collection.")
+        .setDesc("Does not modify the Anki collection. Also reports the open Anki profile.")
         .addButton((button) => button.setButtonText("Test").onClick(() => void this.plugin.testConnection()));
     }
   }

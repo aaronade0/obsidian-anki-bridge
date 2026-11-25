@@ -440,10 +440,34 @@ Anki through AnkiConnect.
 ## Settings
 
 On desktop, the settings page contains the AnkiConnect address and optional API
-key, deck root, vault-name override, automatic synchronization controls,
+key, an optional required Anki profile, deck root, vault-name override, automatic synchronization controls,
 path-audit interval, success notifications, connection test, and the in-app
 guide. On mobile, the local connection fields are replaced by the current
 outbox count because no mobile connection configuration is required.
+
+### Required Anki profile
+
+Anki has one profile open at a time, and AnkiConnect always works on that
+profile. If several people or purposes share one Anki installation, set
+**Required Anki profile** (desktop only) to the profile the bridge belongs to.
+The field suggests the profiles Anki reports while it is open.
+
+- Empty (default): the bridge uses whichever profile is open, as before.
+- Set: before the bridge reads or writes anything in Anki, it asks AnkiConnect
+  which profile is open (`getActiveProfile`). This applies to automatic and
+  manual synchronization, full scans, the path audit, queued mobile changes,
+  confirmed deletions, and opening cards in Anki.
+- With a different profile open, synchronization is **paused, not failed**.
+  The status bar shows `Anki: waiting for profile "…"`, queued mobile changes
+  stay queued in order, and no card is marked as missing or removed. Once the
+  required profile is open again, everything waiting is synchronized
+  automatically.
+- If the installed AnkiConnect cannot report the open profile, the bridge stays
+  paused instead of guessing. Update AnkiConnect or clear the setting.
+- The bridge never switches profiles itself, because that would close the
+  profile you are working in.
+
+**Test connection** also reports the open profile and whether it matches.
 
 ### Source filters
 

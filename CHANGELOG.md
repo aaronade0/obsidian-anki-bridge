@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.6.0 - Restrict syncing to one Anki profile
+
+- Added the optional desktop setting **Required Anki profile**. When set, the
+  bridge checks the open profile through AnkiConnect's `getActiveProfile`
+  before every read or write, so it never touches another person's profile.
+- A different profile pauses synchronization instead of failing: the status
+  bar shows `Anki: waiting for profile "…"`, queued mobile changes keep their
+  order, nothing is marked missing or removed, and waiting notes are
+  synchronized automatically once the right profile is open.
+- If AnkiConnect cannot report the open profile, the bridge stays paused and
+  explains why. It never calls `loadProfile`.
+- The setting suggests the profiles Anki reports, and **Test connection** now
+  shows the open profile.
+
 ## 1.5.0 - Delete all pending cards at once
 
 - Added **Delete all N pending cards from Anki…** to the conflict report when

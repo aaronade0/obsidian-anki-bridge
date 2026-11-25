@@ -29,14 +29,82 @@ const IMAGE_OCCLUSION_FIELDS = ["Occlusion", "Image", "Header", "Back Extra", "C
 /** AnkiConnect did not answer at all, usually because Anki is not running. */
 export class AnkiUnreachableError extends Error {}
 
+/**
+ * Anki answered, but not with the profile the bridge is restricted to. This is
+ * a pause, not a failure: callers treat it like a closed Anki, so queued work
+ * waits and nothing is marked as missing or removed.
+ */
+export class AnkiProfileMismatchError extends AnkiUnreachableError {
+  constructor(readonly status: AnkiProfileStatus) {
+    super(describeProfileMismatch(status));
+  }
+}
+
+/**
+ * Result of the last profile check. `activeProfile` is undefined when the
+ * installed AnkiConnect cannot report it (no `getActiveProfile` action).
+ */
+export interface AnkiProfileStatus {
+  requiredProfile: string;
+  activeProfile?: string;
+  matches: boolean;
+}
+
+/** Shared between short-lived clients so a sync does not re-check before every request. */
+export interface AnkiProfileCheckCache {
+  checkedAt: number;
+  requiredProfile: string;
+  activeProfile: string;
+}
+
+export interface AnkiProfileGuard {
+  requiredProfile: string;
+  cache?: Partial<AnkiProfileCheckCache>;
+  onStatus?: (status: AnkiProfileStatus | undefined) => void;
+  now?: () => number;
+}
+
+/**
+ * A matching profile is trusted for this long before the next request checks
+ * again. Switching profiles in Anki closes the collection and takes longer
+ * than this, so a sync cannot slip into a newly opened profile unnoticed.
+ */
+export const PROFILE_CHECK_TTL_MS = 1_000;
+
+/** Actions that never touch the collection and therefore run without the profile check. */
+const PROFILE_INDEPENDENT_ACTIONS = new Set(["version", "getActiveProfile", "getProfiles"]);
+
+export function normalizeProfileName(name: string): string {
+  return name.trim();
+}
+
+export function describeProfileMismatch(status: AnkiProfileStatus): string {
+  if (status.activeProfile === undefined) {
+    return `Anki Bridge is restricted to the Anki profile “${status.requiredProfile}”, but this AnkiConnect version cannot report the open profile (getActiveProfile). Synchronization is paused; update AnkiConnect or clear the “Required Anki profile” setting.`;
+  }
+  return `Anki profile “${status.activeProfile}” is open; waiting for “${status.requiredProfile}”.`;
+}
+
+function isUnsupportedActionError(error: unknown): boolean {
+  return /unsupported action|unknown action|not supported/i.test(errorMessage(error));
+}
+
 export class AnkiConnectClient {
   constructor(
     private readonly url: string,
     private readonly apiKey: string,
-    private readonly onReachability?: (reachable: boolean) => void
+    private readonly onReachability?: (reachable: boolean) => void,
+    private readonly profileGuard?: AnkiProfileGuard
   ) {}
 
   async invoke<T>(action: string, params: Record<string, unknown> = {}): Promise<T> {
+    if (!PROFILE_INDEPENDENT_ACTIONS.has(action)) {
+      await this.assertRequiredProfile();
+    }
+    return this.request<T>(action, params);
+  }
+
+  private async request<T>(action: string, params: Record<string, unknown> = {}): Promise<T> {
     const payload: Record<string, unknown> = { action, version: 6, params };
     if (this.apiKey.trim()) {
       payload.key = this.apiKey.trim();
@@ -66,6 +134,61 @@ export class AnkiConnectClient {
       throw new Error(`AnkiConnect: ${body.error}`);
     }
     return body.result;
+  }
+
+  /** Name of the profile currently open in Anki, or undefined if AnkiConnect cannot tell. */
+  async getActiveProfile(): Promise<string | undefined> {
+    try {
+      const profile = await this.request<unknown>("getActiveProfile");
+      return typeof profile === "string" ? profile : undefined;
+    } catch (error) {
+      if (isUnsupportedActionError(error)) {
+        return undefined;
+      }
+      throw error;
+    }
+  }
+
+  async getProfiles(): Promise<string[]> {
+    const profiles = await this.request<unknown>("getProfiles");
+    return Array.isArray(profiles) ? profiles.filter((name): name is string => typeof name === "string") : [];
+  }
+
+  /**
+   * Throws AnkiProfileMismatchError unless the required profile is open. A
+   * no-op when no profile is required. `fresh` skips the short-lived cache.
+   */
+  async assertRequiredProfile(fresh = false): Promise<void> {
+    const guard = this.profileGuard;
+    const requiredProfile = normalizeProfileName(guard?.requiredProfile ?? "");
+    if (!guard || !requiredProfile) {
+      guard?.onStatus?.(undefined);
+      return;
+    }
+    const now = (guard.now ?? Date.now)();
+    const cache = guard.cache;
+    if (!fresh && cache && cache.requiredProfile === requiredProfile &&
+        typeof cache.checkedAt === "number" && now - cache.checkedAt < PROFILE_CHECK_TTL_MS) {
+      return;
+    }
+    if (cache) {
+      cache.checkedAt = 0;
+    }
+    const activeProfile = await this.getActiveProfile();
+    const status: AnkiProfileStatus = {
+      requiredProfile,
+      activeProfile,
+      matches: activeProfile !== undefined && normalizeProfileName(activeProfile) === requiredProfile
+    };
+    guard.onStatus?.(status);
+    if (!status.matches) {
+      throw new AnkiProfileMismatchError(status);
+    }
+    if (cache && activeProfile !== undefined) {
+      cache.checkedAt = now;
+      cache.requiredProfile = requiredProfile;
+      cache.activeProfile = activeProfile;
+    }
   }
 
   async ping(): Promise<number> {

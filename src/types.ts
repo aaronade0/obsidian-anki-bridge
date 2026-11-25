@@ -94,6 +94,8 @@ export interface PluginSettings {
   excludedPaths: string[];
   excludedFilenamePatterns: string[];
   includedFolders: string[];
+  /** Desktop only. Empty: any open profile. Otherwise sync pauses unless this profile is open. */
+  requiredAnkiProfile: string;
 }
 
 export interface PluginData {

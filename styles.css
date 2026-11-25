@@ -50,7 +50,8 @@
   font-weight: 600;
 }
 
-.oab-status.is-disconnected {
+.oab-status.is-disconnected,
+.oab-status.is-profile-paused {
   color: var(--color-orange);
 }
 
